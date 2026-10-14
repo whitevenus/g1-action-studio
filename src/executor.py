@@ -2,8 +2,11 @@
 
 import math
 
-from . import ARM_SLOTS, PROFILE
-from .author import DT, _frame_digest
+from .constants import (
+    ARM_JOINT_COUNT, ARM_SLOTS, DT, EXPECTED_MODE, EXPECTED_MOTOR_MODES, PLAN_SCHEMA, PROFILE,
+)
+from .profiles import validate_replay_profile as validate_profile
+from .trajectory import frame_digest
 from .replay import sample_schedule, screen_schedule
 
 
@@ -11,39 +14,18 @@ class Cancelled(RuntimeError):
     pass
 
 
-def validate_profile(profile):
-    required = ("hold_kp", "hold_kd",
-                "max_tracking_error_rad", "initial_pose_tolerance_rad", "return_tolerance_rad", "return_speed_rad_s",
-                "state_timeout_s", "max_tick_gap_s", "settle_timeout_s", "recovery_release_s")
-    if not isinstance(profile, dict):
-        raise ValueError("回放参数必须是对象")
-    for key in required + tuple(key for key in ("max_speed_rad_s", "max_offset_rad") if key in profile):
-        value = profile.get(key)
-        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
-            raise ValueError("回放参数 {} 必须为正的有限数".format(key))
-    if not DT <= profile["recovery_release_s"] <= 120 or not DT <= profile["settle_timeout_s"] <= 120:
-        raise ValueError("恢复释放和回位等待时长须为 0.02–120 秒")
-    if profile["max_tick_gap_s"] < DT:
-        raise ValueError("控制周期超时阈值不得小于 0.02 秒")
-    if profile["return_tolerance_rad"] > profile["max_tracking_error_rad"]:
-        raise ValueError("回位容差不得大于跟踪误差阈值")
-    if "max_speed_rad_s" in profile and profile["return_speed_rad_s"] > profile["max_speed_rad_s"]:
-        raise ValueError("回位速度容差不得大于反馈速度阈值")
-    return dict(profile)
-
-
 def validate_plan(plan):
-    if (not isinstance(plan, dict) or plan.get("schema") != "g1-arm7-offline-replay-plan-v1"
+    if (not isinstance(plan, dict) or plan.get("schema") != PLAN_SCHEMA
             or plan.get("target_profile") != PROFILE or plan.get("arm_slots") != list(ARM_SLOTS)
             or plan.get("hardware_enabled") is not False
             or plan.get("qualification") != "offline_only_not_executable"
             or plan.get("status") != "offline_numerical_pass"):
         raise ValueError("仅接受数值通过的离线 Arm7 回放计划")
     frames = plan["frames"]
-    if len(frames) > 30001 or plan["schedule_sha256"] != _frame_digest(frames):
+    if len(frames) > 30001 or plan["schedule_sha256"] != frame_digest(frames):
         raise ValueError("回放序列长度或摘要无效")
     limits = plan["model"]["limits_rad"]
-    if (len(limits) != 14 or any(len(pair) != 2 or
+    if (len(limits) != ARM_JOINT_COUNT or any(len(pair) != 2 or
             any(type(x) not in (int, float) or not math.isfinite(x) for x in pair)
             or pair[0] >= pair[1] for pair in limits)):
         raise ValueError("回放计划关节范围无效")
@@ -107,13 +89,13 @@ def execute_replay(plan, profile, port_factory, clock, stop):
                 or not 0 <= now - at <= profile["state_timeout_s"]
                 or (last_state_at is not None and at < last_state_at)):
             raise RuntimeError("状态超时或时间戳无效")
-        if (state.get("mode_pr"), state.get("mode_machine")) != (0, 5):
+        if (state.get("mode_pr"), state.get("mode_machine")) != EXPECTED_MODE:
             raise RuntimeError("机器人模式已改变")
-        if tuple(state.get("motor_modes", ())) != (1,) * 14:
+        if tuple(state.get("motor_modes", ())) != EXPECTED_MOTOR_MODES:
             raise RuntimeError("手臂电机模式不符合条件")
         for key in ("q", "dq"):
             values = state.get(key)
-            if (not isinstance(values, (tuple, list)) or len(values) != 14
+            if (not isinstance(values, (tuple, list)) or len(values) != ARM_JOINT_COUNT
                     or any(type(x) not in (int, float) or not math.isfinite(x) for x in values)):
                 raise RuntimeError("关节状态无效")
         if any(q < low or q > high for q, (low, high) in zip(state["q"], limits)):

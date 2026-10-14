@@ -1,20 +1,19 @@
 """离线回放调度与数值筛查；不导入 SDK，不生成可发送的电机命令。"""
 
-import json
 import math
 from bisect import bisect_right
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
-from . import ARM_SLOTS, JOINT_NAMES, PROFILE
-from .author import DT, _finite_vector, _frame_digest, metrics, validate_draft
-
-
-DEFAULT_MODEL = Path(__file__).resolve().parent / "resources/g1_arm7_limits.xml"
+from .constants import ARM_SLOTS, DEFAULT_MODEL, DT, JOINT_NAMES, PLAN_SCHEMA, PROFILE
+from .author import validate_draft
+from .files import read_json
+from .trajectory import (finite_vector, frame_digest, hold_other_arm, interpolate_positions,
+                         joint_motion, metrics, smoothstep)
 
 
 def load_baseline(path):
-    data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    data = read_json(path)
     if (not isinstance(data, dict)
             or data.get("schema") != "g1-arm7-replay-baseline-v1"
             or data.get("target_profile") != PROFILE
@@ -22,7 +21,7 @@ def load_baseline(path):
         raise ValueError("回放基线必须显式提供 Arm7 J15–J28 配置")
     if not isinstance(data.get("provenance"), str) or not data["provenance"].strip():
         raise ValueError("基线必须填写 provenance，说明姿态来源和时间")
-    data["q"] = _finite_vector(data.get("q"))
+    data["q"] = finite_vector(data.get("q"))
     return data
 
 
@@ -71,11 +70,11 @@ def retime_frames(frames, speed_scale):
     output = []
     for step in range(steps + 1):
         u = step / steps
-        source_t = duration * u ** 3 * (10 + u * (-15 + 6 * u))
+        source_t = duration * smoothstep(u)
         position = source_t / DT
         left = min(int(position), len(frames) - 2)
         ratio = min(1.0, max(0.0, position - left))
-        q = [a + (b - a) * ratio for a, b in zip(frames[left]["q"], frames[left + 1]["q"])]
+        q = interpolate_positions(frames[left]["q"], frames[left + 1]["q"], ratio)
         output.append({"t": round(step * DT, 6), "q": q})
     output[0]["q"] = list(frames[0]["q"])
     output[-1]["q"] = list(frames[-1]["q"])
@@ -85,7 +84,7 @@ def retime_frames(frames, speed_scale):
 def build_schedule(frames, baseline, takeover=3.0, enter=5.0, return_seconds=5.0, release=2.0):
     """完整正常路径；返回显式基线。weight 仅是离线分析值。"""
     metrics(frames)
-    baseline = _finite_vector(baseline)
+    baseline = finite_vector(baseline)
     durations = [_steps(value) for value in (takeover, enter, return_seconds, release)]
     if frames[-1]["t"] > 120:
         raise ValueError("离线动作时长不得超过 120 秒")
@@ -97,9 +96,9 @@ def build_schedule(frames, baseline, takeover=3.0, enter=5.0, return_seconds=5.0
         for step in range(1, steps + 1):
             u = step / steps
             # 五次平滑曲线：两端一阶、二阶导数为零。
-            blend = u ** 3 * (10 + u * (-15 + 6 * u))
+            blend = smoothstep(u)
             output.append({"t": round(len(output) * DT, 6), "phase": name,
-                           "q": [a + (b - a) * blend for a, b in zip(start, end)],
+                           "q": interpolate_positions(start, end, blend),
                            "weight": weight_start + (weight_end - weight_start) * blend})
         phases.append({"phase": name, "start_s": began, "end_s": output[-1]["t"]})
 
@@ -128,7 +127,7 @@ def sample_schedule(frames, elapsed, times=None):
     before, after = frames[right - 1:right + 1]
     ratio = (elapsed - before["t"]) / (after["t"] - before["t"])
     return {"t": elapsed, "phase": after["phase"] if ratio > 0 else before["phase"],
-            "q": [a + (b - a) * ratio for a, b in zip(before["q"], after["q"])],
+            "q": interpolate_positions(before["q"], after["q"], ratio),
             "weight": before["weight"] + (after["weight"] - before["weight"]) * ratio}
 
 
@@ -138,13 +137,13 @@ def screen_schedule(frames, limits, max_velocity, max_acceleration):
             raise ValueError("离线速度和加速度阈值必须是正的有限数")
     if len(limits) != len(ARM_SLOTS):
         raise ValueError("必须提供全部 14 个关节范围")
-    computed = metrics(frames)
+    motion = joint_motion(frames)
+    computed = metrics(frames, motion)
     violations = []
     per_joint = []
     for offset, (low, high) in enumerate(limits):
         values = [frame["q"][offset] for frame in frames]
-        velocities = [(b - a) / DT for a, b in zip(values, values[1:])]
-        accelerations = [(b - a) / DT for a, b in zip(velocities, velocities[1:])]
+        _, velocities, accelerations = motion[offset]
         per_joint.append({"slot": ARM_SLOTS[offset], "name": JOINT_NAMES[offset],
                           "range_rad": [low, high], "min_rad": min(values), "max_rad": max(values),
                           "max_abs_velocity_rad_s": max(map(abs, velocities)),
@@ -166,7 +165,7 @@ def screen_schedule(frames, limits, max_velocity, max_acceleration):
 def plan_replay(draft_path, baseline_path, model_path, max_velocity, max_acceleration,
                 takeover=3.0, enter=5.0, return_seconds=5.0, release=2.0):
     # 用同一份草稿快照进行完整性检查与规划，避免两次读文件结果不同。
-    data = json.loads(Path(draft_path).read_text(encoding="utf-8-sig"))
+    data = read_json(draft_path)
     baseline = load_baseline(baseline_path)
     return create_plan(data, baseline, model_path, max_velocity, max_acceleration,
                        takeover, enter, return_seconds, release)
@@ -177,19 +176,17 @@ def create_plan(data, baseline, model_path, max_velocity, max_acceleration,
                 speed_scale=None, side=None):
     """文件规划和现场规划共用；现场基线由只读反馈提供。"""
     validate_draft(data)
-    q = _finite_vector(baseline["q"])
+    q = finite_vector(baseline["q"])
     limits = load_limits(model_path)
     motion = data["frames"] if speed_scale is None else retime_frames(data["frames"], speed_scale)
     if side is not None:
         if side not in ("left", "right"):
             raise ValueError("回放侧必须为 left 或 right")
-        held = range(7, 14) if side == "left" else range(7)
-        motion = [{"t": frame["t"], "q": [q[i] if i in held else value
-                   for i, value in enumerate(frame["q"])]} for frame in motion]
+        motion = hold_other_arm(motion, q, side)
     frames, phases = build_schedule(motion, q, takeover, enter,
                                    return_seconds, release)
     screening = screen_schedule(frames, limits, max_velocity, max_acceleration)
-    return {"schema": "g1-arm7-offline-replay-plan-v1",
+    return {"schema": PLAN_SCHEMA,
             "qualification": "offline_only_not_executable", "hardware_enabled": False,
             "status": "offline_numerical_rejected" if screening["violations"] else "offline_numerical_pass",
             "target_profile": PROFILE, "arm_slots": list(ARM_SLOTS),
@@ -198,5 +195,5 @@ def create_plan(data, baseline, model_path, max_velocity, max_acceleration,
             "baseline": baseline, "model": {"file_name": Path(model_path).name,
                                            "limits_rad": [list(pair) for pair in limits]},
             "thresholds": {"max_velocity_rad_s": max_velocity, "max_acceleration_rad_s2": max_acceleration},
-            "phases": phases, "frames": frames, "schedule_sha256": _frame_digest(frames),
+            "phases": phases, "frames": frames, "schedule_sha256": frame_digest(frames),
             **screening}

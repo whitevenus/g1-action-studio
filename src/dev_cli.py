@@ -5,8 +5,9 @@ import json
 import sys
 from pathlib import Path
 
-from .author import write_draft
-from .replay import DEFAULT_MODEL, plan_replay
+from .constants import DEFAULT_MODEL
+from .replay import plan_replay
+from .files import read_json, write_json
 
 
 def main(argv=None):
@@ -41,15 +42,15 @@ def main(argv=None):
                                  args.max_acceleration, args.takeover_seconds, args.enter_seconds,
                                  args.return_seconds, args.release_seconds)
         else:
-            plan = json.loads(Path(args.plan).read_text(encoding="utf-8-sig"))
+            plan = read_json(args.plan)
             if args.command == "simulate-replay":
                 from .simulated_sdk import simulate_replay
-                profile = None if args.profile is None else json.loads(Path(args.profile).read_text(encoding="utf-8-sig"))
+                profile = None if args.profile is None else read_json(args.profile)
                 report = simulate_replay(plan, args.scenario, profile)
             else:
                 from .unitree_audit import audit_unitree_replay
                 report = audit_unitree_replay(plan)
-        write_draft(report, args.output)
+        write_json(report, args.output)
     except (OSError, ValueError, RuntimeError, ImportError, KeyError, TypeError) as error:
         print("失败：{}".format(error), file=sys.stderr)
         return 1

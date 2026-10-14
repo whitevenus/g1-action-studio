@@ -4,5 +4,5 @@ include README.md CONTRIBUTING.md
 recursive-include src/resources *.xml
 recursive-include src/resources/collision *.STL *.json
 recursive-include examples *.json
-recursive-include docs *.md
+recursive-include docs *.md *.html *.svg *.png
 recursive-include tests *.py

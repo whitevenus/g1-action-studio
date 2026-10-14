@@ -7,21 +7,13 @@ import re
 from bisect import bisect_right
 from pathlib import Path
 
-from . import ARM_SLOTS, JOINT_NAMES, PROFILE
+from .constants import ARM_SLOTS, DRAFT_SCHEMA, DT, JOINT_NAMES, PROFILE, RECORDING_SCHEMA
+from .files import read_json, write_json as write_draft
+from .trajectory import finite_vector, frame_digest, interpolate_positions, metrics
 
 
-DT = 0.02
 MAX_SOURCE_GAP = 0.10  # 拒绝状态采样缺口；这不是动作安全阈值。
 CODE_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:[._][a-z0-9]+)*$")
-
-
-def _finite_vector(values):
-    if not isinstance(values, list) or len(values) != len(ARM_SLOTS):
-        raise ValueError("每帧必须包含全部 14 个双臂关节")
-    result = [float(value) for value in values]
-    if not all(math.isfinite(value) for value in result):
-        raise ValueError("关节数据包含 NaN 或 Infinity")
-    return result
 
 
 def load_source(path, *, allow_synthetic=True):
@@ -33,7 +25,7 @@ def load_source(path, *, allow_synthetic=True):
     if data.get("arm_slots") != list(ARM_SLOTS):
         raise ValueError("记录的关节槽位与 Arm7 J15–J28 不符")
     schema = data.get("schema")
-    if schema == "g1-arm7-state-recording-v1":
+    if schema == RECORDING_SCHEMA:
         if data.get("target_profile") != PROFILE:
             raise ValueError("目标设备配置不匹配")
         rows = data.get("samples")
@@ -56,7 +48,7 @@ def load_source(path, *, allow_synthetic=True):
         t = float(t)
         if not math.isfinite(t) or t <= last_time or t < 0:
             raise ValueError("录制时间必须为严格递增的非负有限值")
-        samples.append({"t": t, "q": _finite_vector(q), "dq": _finite_vector(dq),
+        samples.append({"t": t, "q": finite_vector(q), "dq": finite_vector(dq),
                         "mode_machine": int(mode_machine),
                         "mode_pr": None if mode_pr is None else int(mode_pr)})
         last_time = t
@@ -74,42 +66,7 @@ def _interpolate(samples, times, moment):
     if span > MAX_SOURCE_GAP:
         raise ValueError("录制中存在超过 0.1 秒的状态缺口")
     ratio = (moment - times[left]) / span
-    return [a + (b - a) * ratio for a, b in
-            zip(samples[left]["q"], samples[right]["q"])]
-
-
-def metrics(frames):
-    if not isinstance(frames, list) or len(frames) < 3:
-        raise ValueError("轨迹至少需要三帧")
-    if any(not isinstance(frame, dict) for frame in frames):
-        raise ValueError("每帧必须是包含 t 和 q 的对象")
-    points = [_finite_vector(frame["q"]) for frame in frames]
-    times = [float(frame["t"]) for frame in frames]
-    if (not all(math.isfinite(t) for t in times) or abs(times[0]) > 1e-8
-            or any(abs((b - a) - DT) > 1e-5
-                   for a, b in zip(times, times[1:]))):
-        raise ValueError("轨迹必须从 0 开始，以 50 Hz 等间隔采样")
-    velocities = [[(b - a) / DT for a, b in zip(p, q)]
-                  for p, q in zip(points, points[1:])]
-    accelerations = [[(b - a) / DT for a, b in zip(p, q)]
-                     for p, q in zip(velocities, velocities[1:])]
-    return {
-        "duration_s": round(times[-1], 6),
-        "frame_count": len(frames),
-        "max_abs_velocity_rad_s": max(abs(v) for row in velocities for v in row),
-        "max_abs_acceleration_rad_s2": max(abs(a) for row in accelerations for a in row),
-        "max_excursion_from_start_rad": max(
-            abs(v - initial) for row in points for v, initial in zip(row, points[0])),
-        "start_end_max_error_rad": max(abs(a - b) for a, b in zip(points[0], points[-1])),
-        "first_step_max_velocity_rad_s": max(abs(v) for v in velocities[0]),
-        "last_step_max_velocity_rad_s": max(abs(v) for v in velocities[-1]),
-    }
-
-
-def _frame_digest(frames):
-    canonical = json.dumps(frames, sort_keys=True, separators=(",", ":"),
-                           allow_nan=False).encode("utf-8")
-    return hashlib.sha256(canonical).hexdigest()
+    return interpolate_positions(samples[left]["q"], samples[right]["q"], ratio)
 
 
 def build_draft(source, start, end, code, version, name, *, allow_synthetic=True):
@@ -140,7 +97,7 @@ def build_draft(source, start, end, code, version, name, *, allow_synthetic=True
                "q": _interpolate(samples, times, start + i * DT)}
               for i in range(steps + 1)]
     result = {
-        "schema": "g1-arm7-action-draft-v1",
+        "schema": DRAFT_SCHEMA,
         "qualification": "draft_unqualified_not_executable",
         "action_code": code,
         "action_version": version,
@@ -156,27 +113,20 @@ def build_draft(source, start, end, code, version, name, *, allow_synthetic=True
         "hardware_enabled": False,
         "frames": frames,
         "metrics": metrics(frames),
-        "trajectory_sha256": _frame_digest(frames),
+        "trajectory_sha256": frame_digest(frames),
     }
     return result
 
 
-def write_draft(draft, output):
-    with Path(output).open("x", encoding="utf-8") as stream:
-        json.dump(draft, stream, ensure_ascii=False, separators=(",", ":"),
-                  allow_nan=False)
-        stream.write("\n")
-
-
 def audit_draft(path):
-    data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    data = read_json(path)
     return validate_draft(data)
 
 
 def validate_draft(data):
     """对已经读取的同一份草稿进行结构与摘要检查。"""
     if (not isinstance(data, dict)
-            or data.get("schema") != "g1-arm7-action-draft-v1"
+            or data.get("schema") != DRAFT_SCHEMA
             or data.get("qualification") != "draft_unqualified_not_executable"
             or data.get("hardware_enabled") is not False
             or data.get("target_profile") != PROFILE
@@ -184,6 +134,6 @@ def validate_draft(data):
         raise ValueError("不是本工具生成的未验收 Arm7 草稿")
     frames = data.get("frames")
     computed = metrics(frames)
-    if data.get("trajectory_sha256") != _frame_digest(frames):
+    if data.get("trajectory_sha256") != frame_digest(frames):
         raise ValueError("轨迹摘要不匹配")
     return computed

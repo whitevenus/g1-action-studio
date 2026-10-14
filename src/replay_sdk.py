@@ -2,8 +2,8 @@
 
 from threading import Lock
 
-from . import ARM_SLOTS, WEIGHT_SLOT
-from .author import DT
+from .constants import ARM_COMMAND_TOPIC, ARM_SLOTS, DT, LOWSTATE_TOPIC, WEIGHT_SLOT
+from .unitree_binding import arm_snapshot, close_channels
 
 
 class ReplaySdkPort:
@@ -14,9 +14,9 @@ class ReplaySdkPort:
         self.latest = None
         self.commands = 0
         try:
-            self.subscriber = sdk.ChannelSubscriber("rt/lowstate", getattr(sdk, "LowStateType", sdk.LowState))
+            self.subscriber = sdk.ChannelSubscriber(LOWSTATE_TOPIC, getattr(sdk, "LowStateType", sdk.LowState))
             self.subscriber.Init(self._on_state, 10)
-            self.arm_subscriber = sdk.ChannelSubscriber("rt/arm_sdk", getattr(sdk, "LowCmdType", sdk.LowCmd))
+            self.arm_subscriber = sdk.ChannelSubscriber(ARM_COMMAND_TOPIC, getattr(sdk, "LowCmdType", sdk.LowCmd))
             self.arm_subscriber.Init(self._on_command, 10)
         except BaseException as error:
             try:
@@ -27,12 +27,7 @@ class ReplaySdkPort:
 
     def _on_state(self, message):
         try:
-            motors = [message.motor_state[i] for i in ARM_SLOTS]
-            state = {"at": self.clock.monotonic(), "mode_pr": int(message.mode_pr),
-                     "mode_machine": int(message.mode_machine),
-                     "motor_modes": tuple(int(m.mode) for m in motors),
-                     "q": tuple(float(m.q) for m in motors),
-                     "dq": tuple(float(m.dq) for m in motors)}
+            state = arm_snapshot(message, self.clock)
         except (AttributeError, TypeError, ValueError, IndexError):
             # 不沿用旧反馈掩盖损坏消息。
             state = None
@@ -67,7 +62,7 @@ class ReplaySdkPort:
             raise RuntimeError("运控或手臂服务不符合候选条件")
 
     def start_publisher(self):
-        self.publisher = self.sdk.ChannelPublisher("rt/arm_sdk", getattr(self.sdk, "LowCmdType", self.sdk.LowCmd))
+        self.publisher = self.sdk.ChannelPublisher(ARM_COMMAND_TOPIC, getattr(self.sdk, "LowCmdType", self.sdk.LowCmd))
         self.publisher.Init()
 
     def write(self, positions, kp, kd, weight):
@@ -85,15 +80,6 @@ class ReplaySdkPort:
         return self.publisher.Write(command)
 
     def close(self):
-        errors = []
-        for name in ("publisher", "arm_subscriber", "subscriber"):
-            resource = getattr(self, name)
-            if resource is not None:
-                try:
-                    resource.Close()
-                except Exception as error:
-                    errors.append("{}：{}".format(name, error))
-                finally:
-                    setattr(self, name, None)
+        errors = close_channels(self)
         if errors:
             raise RuntimeError("；".join(errors))

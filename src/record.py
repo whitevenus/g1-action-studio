@@ -1,13 +1,13 @@
 """只读录制 rt/lowstate；不创建命令发布者，也不请求动作。"""
 
-import json
 import math
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 
-from . import ARM_SLOTS, JOINT_NAMES, PROFILE
+from .constants import ARM_SLOTS, DT, JOINT_NAMES, LOWSTATE_TOPIC, PROFILE, RECORDING_SCHEMA
+from .files import write_json
 
 
 def record(interface, seconds, output):
@@ -53,7 +53,7 @@ def record(interface, seconds, output):
             return
         with lock:
             received += 1
-            if now - last_saved < 0.02:
+            if now - last_saved < DT:
                 return
             last_saved = now
             samples.append(sample)
@@ -61,7 +61,7 @@ def record(interface, seconds, output):
     subscriber = None
     try:
         ChannelFactoryInitialize(0, interface)
-        subscriber = ChannelSubscriber("rt/lowstate", LowState_)
+        subscriber = ChannelSubscriber(LOWSTATE_TOPIC, LowState_)
         subscriber.Init(on_state, 10)
         print("只读记录 rt/lowstate；此程序不创建动作命令发布者。", flush=True)
         time.sleep(seconds)
@@ -72,7 +72,7 @@ def record(interface, seconds, output):
     if len(samples) < 2:
         raise RuntimeError("未收到足够的有效关节状态；未保存录制")
     payload = {
-        "schema": "g1-arm7-state-recording-v1",
+        "schema": RECORDING_SCHEMA,
         "qualification": "raw_observation_not_executable",
         "target_profile": PROFILE,
         "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -84,8 +84,6 @@ def record(interface, seconds, output):
         "invalid_messages": invalid,
         "samples": samples,
     }
-    with output.open("x", encoding="utf-8") as stream:
-        json.dump(payload, stream, ensure_ascii=False, separators=(",", ":"))
-        stream.write("\n")
+    write_json(payload, output, allow_nan=True)
     return {"path": str(output), "samples": len(samples), "received": received,
             "invalid": invalid}

@@ -1,13 +1,14 @@
 """动作 A → 避碰过渡 → 动作 B；只生成离线轨迹，不接入真机执行器。"""
 
-import json
 import hashlib
 import math
 import random
 from pathlib import Path
 
-from . import ARM_SLOTS, PROFILE
-from .author import DT, build_draft, metrics, validate_draft, write_draft
+from .constants import ARM_OFFSETS, ARM_SLOTS, COLLISION_MODEL, DRAFT_SCHEMA, DT, PROFILE
+from .author import build_draft, validate_draft
+from .files import read_json, write_json
+from .trajectory import hold_other_arm, interpolate_positions, metrics, smoothstep
 from .collision import COLLISION_MODEL, CollisionModel
 from .replay import retime_frames, screen_schedule
 
@@ -17,8 +18,8 @@ def find_path(model, start, end, side, margin=0.02, seed=0, iterations=1200):
     start, end = model.validate(start), model.validate(end)
     if side not in ('left', 'right') or not 0.001 <= margin <= 0.10:
         raise ValueError('side 须为 left/right；避碰余量须为 0.001–0.10 米')
-    selected = range(0, 7) if side == 'left' else range(7, 14)
-    fixed = set(range(14)) - set(selected)
+    selected = ARM_OFFSETS[side]
+    fixed = set(range(len(ARM_SLOTS))) - set(selected)
     if any(start[i] != end[i] for i in fixed):
         raise ValueError('过渡时另一侧手臂必须保持同一姿态')
     for label, q in [('开始', start), ('结束', end)]:
@@ -35,7 +36,7 @@ def find_path(model, start, end, side, margin=0.02, seed=0, iterations=1200):
         nearest = min(range(len(points)), key=lambda n: sum((points[n][i] - target[i])**2 for i in selected))
         distance = math.sqrt(sum((points[nearest][i] - target[i])**2 for i in selected))
         ratio = min(1.0, 0.30 / max(distance, 1e-12))
-        q = [a + (b-a)*ratio for a, b in zip(points[nearest], target)]
+        q = interpolate_positions(points[nearest], target, ratio)
         if not model.edge_clear(points[nearest], q, margin):
             return None
         points.append(q)
@@ -93,15 +94,15 @@ def smooth_path(path, max_velocity=0.5, max_acceleration=2.0):
         steps = math.ceil(seconds/DT)
         for step in range(1, steps+1):
             u = step/steps
-            blend = u**3*(10+u*(-15+6*u))
-            frames.append({'t': round(len(frames)*DT, 6), 'q': [x+(y-x)*blend for x,y in zip(a,b)],
+            blend = smoothstep(u)
+            frames.append({'t': round(len(frames)*DT, 6), 'q': interpolate_positions(a, b, blend),
                            'phase': 'transition'})
     return frames
 
 
 def _action(path, speed_scale):
-    data = json.loads(Path(path).read_text(encoding='utf-8-sig'))
-    if data.get('schema') == 'g1-arm7-action-draft-v1':
+    data = read_json(path)
+    if data.get('schema') == DRAFT_SCHEMA:
         validate_draft(data)
     else:
         data = build_draft(path, None, None, 'offline.transition', 1, '离线动作衔接')
@@ -114,11 +115,12 @@ def plan_transition(before, after, output, side='left', speed_scale=0.5,
         raise FileExistsError('输出文件已存在，请换新路径')
     model = CollisionModel(body_q)
     first, second = _action(before, speed_scale), _action(after, speed_scale)
-    selected = set(range(0,7) if side == 'left' else range(7,14))
     # 与单臂回放一致：另一侧手臂保持同一起始姿态。
     baseline = first[0]['q']
-    for frame in first + second:
-        frame['q'] = [v if i in selected else baseline[i] for i,v in enumerate(frame['q'])]
+    if side not in ARM_OFFSETS:
+        raise ValueError('side 须为 left/right；避碰余量须为 0.001–0.10 米')
+    first = hold_other_arm(first, baseline, side)
+    second = hold_other_arm(second, baseline, side)
     path = find_path(model, first[-1]['q'], second[0]['q'], side, margin, seed)
     bridge = smooth_path(path, max_velocity, max_acceleration)
     frames = []
@@ -141,11 +143,11 @@ def plan_transition(before, after, output, side='left', speed_scale=0.5,
               'qualification':'offline_only_not_executable', 'hardware_enabled':False,
               'side':side, 'body_q':model.body_q, 'speed_scale':speed_scale, 'seed':seed,
               'model_xml_sha256':hashlib.sha256(COLLISION_MODEL.read_bytes()).hexdigest(),
-              'model_provenance':json.loads(COLLISION_MODEL.with_name('provenance.json').read_text()),
+              'model_provenance':read_json(COLLISION_MODEL.with_name('provenance.json')),
               'sources':[{'file':Path(p).name,'sha256':hashlib.sha256(Path(p).read_bytes()).hexdigest()} for p in (before,after)],
               'max_velocity_rad_s':max_velocity, 'max_acceleration_rad_s2':max_acceleration,
               'clearance_m':margin, 'minimum_clearance_m':clearance, 'minimum_mount_gap_m':mount_gap,
               'waypoints':path, 'transition_metrics':metrics(bridge), 'metrics':metrics(frames), 'frames':frames}
-    write_draft(report, output)
+    write_json(report, output)
     return {key:report[key] for key in ('status','hardware_enabled','qualification','metrics',
                                         'transition_metrics','minimum_clearance_m','minimum_mount_gap_m')}

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from g1_action_studio.preflight import (
-    _read_arm_service, _read_control_state, report_summary,
+    read_arm_service, read_control_state, report_summary,
 )
 
 
@@ -12,7 +12,7 @@ class PreflightTests(unittest.TestCase):
         loco = SimpleNamespace(GetFsmId=Mock(return_value=(0, 501)))
         switcher = SimpleNamespace(CheckMode=Mock(side_effect=[(3104, None), (0, {"name": "ai"})]))
         with patch("g1_action_studio.preflight.time.sleep") as sleep:
-            result = _read_control_state(loco, switcher)
+            result = read_control_state(loco, switcher)
         self.assertEqual(result, {"motion_service": "ai", "fsm_id": 501})
         self.assertEqual(switcher.CheckMode.call_count, 2)
         sleep.assert_called_once_with(0.5)
@@ -22,7 +22,7 @@ class PreflightTests(unittest.TestCase):
         switcher = SimpleNamespace(CheckMode=Mock(return_value=(3104, None)))
         with patch("g1_action_studio.preflight.time.sleep") as sleep:
             with self.assertRaisesRegex(RuntimeError, "3104"):
-                _read_control_state(loco, switcher)
+                read_control_state(loco, switcher)
         self.assertEqual(switcher.CheckMode.call_count, 3)
         self.assertEqual(sleep.call_count, 2)
         loco.GetFsmId.assert_not_called()
@@ -32,7 +32,7 @@ class PreflightTests(unittest.TestCase):
         switcher = SimpleNamespace(CheckMode=Mock(return_value=(3102, None)))
         with patch("g1_action_studio.preflight.time.sleep") as sleep:
             with self.assertRaisesRegex(RuntimeError, "3102"):
-                _read_control_state(loco, switcher)
+                read_control_state(loco, switcher)
         switcher.CheckMode.assert_called_once()
         sleep.assert_not_called()
         loco.GetFsmId.assert_not_called()
@@ -46,7 +46,7 @@ class PreflightTests(unittest.TestCase):
             def CheckMode(self):
                 return 0, {"name": "ai"}
 
-        self.assertEqual(_read_control_state(Loco(), Switcher()),
+        self.assertEqual(read_control_state(Loco(), Switcher()),
                          {"motion_service": "ai", "fsm_id": 501})
 
     def test_service_list_reports_only_official_arm_service(self):
@@ -55,7 +55,7 @@ class PreflightTests(unittest.TestCase):
                 return 0, [SimpleNamespace(name="other", status=1, protect=False),
                            SimpleNamespace(name="g1_arm_example", status=0, protect=True)]
 
-        self.assertEqual(_read_arm_service(RobotState()),
+        self.assertEqual(read_arm_service(RobotState()),
                          {"name": "g1_arm_example", "status": 0, "protect": True})
 
     def test_summary_never_claims_control_authority(self):

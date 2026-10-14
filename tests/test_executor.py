@@ -12,7 +12,8 @@ from unittest.mock import Mock, patch
 
 from g1_action_studio import ARM_SLOTS, PROFILE
 from g1_action_studio.dev_cli import main
-from g1_action_studio.author import _frame_digest, write_draft
+from g1_action_studio.trajectory import frame_digest
+from g1_action_studio.author import write_draft
 from g1_action_studio.executor import execute_replay
 from g1_action_studio.replay import DEFAULT_MODEL, build_schedule, load_limits
 from g1_action_studio.replay_sdk import ReplaySdkPort
@@ -29,7 +30,7 @@ def make_plan():
             "qualification": "offline_only_not_executable", "status": "offline_numerical_pass",
             "baseline": {"q": [0.0] * 14}, "model": {"limits_rad": load_limits(DEFAULT_MODEL)},
             "thresholds": {"max_velocity_rad_s": 1, "max_acceleration_rad_s2": 20},
-            "frames": frames, "phases": phases, "schedule_sha256": _frame_digest(frames)}
+            "frames": frames, "phases": phases, "schedule_sha256": frame_digest(frames)}
 
 
 class ExecutorTests(unittest.TestCase):
@@ -120,7 +121,7 @@ class ExecutorTests(unittest.TestCase):
 
     def test_rechecks_numeric_limits_even_with_recomputed_digest(self):
         self.plan["frames"][40]["q"][3] = 1
-        self.plan["schedule_sha256"] = _frame_digest(self.plan["frames"])
+        self.plan["schedule_sha256"] = frame_digest(self.plan["frames"])
         with self.assertRaisesRegex(ValueError, "筛查"):
             self.run_executor()
         self.assertFalse(self.sdk.resources)
@@ -130,7 +131,7 @@ class ExecutorTests(unittest.TestCase):
                          lambda p: p["frames"][30].update(phase="unknown")):
             plan = copy.deepcopy(self.plan)
             mutation(plan)
-            plan["schedule_sha256"] = _frame_digest(plan["frames"])
+            plan["schedule_sha256"] = frame_digest(plan["frames"])
             with self.assertRaises(ValueError):
                 execute_replay(plan, self.profile, Mock(), self.clock, self.stop)
 

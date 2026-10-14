@@ -1,13 +1,9 @@
 """固定腿/腰姿态下的双臂碰撞检查；只计算几何，不运行 DDS 或动力学。"""
 
 import math
-from pathlib import Path
 
-from . import JOINT_NAMES
-from .author import _finite_vector
-
-
-COLLISION_MODEL = Path(__file__).resolve().parent / 'resources/collision/g1_arm7_dex3.xml'
+from .constants import ARM_JOINT_COUNT, COLLISION_MODEL, JOINT_NAMES
+from .trajectory import finite_vector
 
 
 class CollisionModel:
@@ -57,7 +53,7 @@ class CollisionModel:
                 self.pairs.append((a, b))
                 self.mount_pairs.append(frozenset(names) in mount_housings)
         # 位移上界为半径 × 转角；半径包含网格偏移和所有下游连杆。
-        self.reach = np.zeros((14, m.ngeom))
+        self.reach = np.zeros((ARM_JOINT_COUNT, m.ngeom))
         for column, joint in enumerate(self.joints):
             for geom in range(m.ngeom):
                 body = m.geom_bodyid[geom]
@@ -73,7 +69,7 @@ class CollisionModel:
         self.mount_pairs = np.array(self.mount_pairs)
 
     def validate(self, q):
-        q = _finite_vector(q)
+        q = finite_vector(q)
         if any(not low <= value <= high for value, (low, high) in zip(q, self.limits)):
             raise ValueError('双臂姿态超出碰撞模型关节范围')
         return q

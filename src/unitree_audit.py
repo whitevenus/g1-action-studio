@@ -12,7 +12,7 @@ from threading import Event
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from . import ARM_SLOTS, WEIGHT_SLOT
+from .constants import ARM_COMMAND_TOPIC, ARM_SLOTS, LOWSTATE_TOPIC, WEIGHT_SLOT
 from .executor import execute_replay, validate_plan
 from .replay_sdk import ReplaySdkPort
 from .simulated_sdk import SIMULATION_PROFILE, SimulatedSDK, VirtualClock
@@ -49,8 +49,8 @@ def block_network():
         }
         # 只绑定参数，不调用接口。SDK 签名变化应使离线审计失败。
         for function, args in (
-            (channel.ChannelSubscriber, ("rt/lowstate", object)),
-            (channel.ChannelPublisher, ("rt/arm_sdk", object)),
+            (channel.ChannelSubscriber, (LOWSTATE_TOPIC, object)),
+            (channel.ChannelPublisher, (ARM_COMMAND_TOPIC, object)),
             (channel.ChannelSubscriber.Init, (None, lambda message: None, 10)),
             (channel.ChannelPublisher.Init, (None,)),
             (channel.ChannelPublisher.Write, (None, object())),
@@ -135,14 +135,14 @@ class RealMessageTransport(SimulatedSDK):
         self.roundtrip_commands = 0
 
     def ChannelSubscriber(self, topic, message_type):
-        required = self.binding.LowStateType if topic == "rt/lowstate" else self.binding.LowCmdType
+        required = self.binding.LowStateType if topic == LOWSTATE_TOPIC else self.binding.LowCmdType
         if message_type is not required:
             raise RuntimeError("订阅通道传入的不是 SDK 消息类型")
         self.channel_types.append({"topic": topic, "kind": "subscriber", "type_name": message_type.__idl_typename__})
         return super().ChannelSubscriber(topic, message_type)
 
     def ChannelPublisher(self, topic, message_type):
-        if topic != "rt/arm_sdk" or message_type is not self.binding.LowCmdType:
+        if topic != ARM_COMMAND_TOPIC or message_type is not self.binding.LowCmdType:
             raise RuntimeError("发布通道的主题或 SDK 消息类型不匹配")
         self.channel_types.append({"topic": topic, "kind": "publisher", "type_name": message_type.__idl_typename__})
         publisher = super().ChannelPublisher(topic, message_type)
@@ -175,7 +175,7 @@ class RealMessageTransport(SimulatedSDK):
             raise RuntimeError("状态序列化往返或 CRC 失败")
         self.roundtrip_states += 1
         for subscriber in self.subscribers:
-            if not subscriber.closed and subscriber.topic == "rt/lowstate":
+            if not subscriber.closed and subscriber.topic == LOWSTATE_TOPIC:
                 subscriber.callback(restored)
 
 

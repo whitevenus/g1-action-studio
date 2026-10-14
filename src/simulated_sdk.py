@@ -5,7 +5,9 @@ import math
 from threading import Event
 from types import SimpleNamespace
 
-from . import ARM_SLOTS
+from .constants import (
+    ARM_COMMAND_TOPIC, ARM_SLOTS, EXPECTED_MODE, EXPECTED_MOTOR_MODES, LOWSTATE_TOPIC,
+)
 from .executor import execute_replay
 from .replay_sdk import ReplaySdkPort
 
@@ -44,12 +46,13 @@ class SimulatedSDK:
         if not math.isfinite(response_s) or response_s <= 0:
             raise ValueError("模拟响应时间须为正的有限数")
         self.clock, self.response_s = clock, response_s
-        self.q, self.dq = list(baseline), [0.0] * 14
+        self.q, self.dq = list(baseline), [0.0] * len(ARM_SLOTS)
         self.target = list(baseline)
         self.weight = 0.0
         self.subscribers, self.resources, self.writes = [], [], []
         self.publisher_started = False
-        self.mode_pr, self.mode_machine, self.motor_modes = 0, 5, [1] * 14
+        self.mode_pr, self.mode_machine = EXPECTED_MODE
+        self.motor_modes = list(EXPECTED_MOTOR_MODES)
         self.services_ok, self.drop_states, self.stuck = True, False, False
         self.fail_next_write = self.fail_positive_writes = self.fail_zero_write = False
         self.close_failure = False
@@ -83,7 +86,7 @@ class SimulatedSDK:
             def Init(self, callback, queue):
                 self.topic, self.callback = topic, callback
                 sdk.subscribers.append(self)
-                if topic == "rt/lowstate":
+                if topic == LOWSTATE_TOPIC:
                     sdk._publish_state()
             def Close(self):
                 self.closed = True
@@ -124,7 +127,7 @@ class SimulatedSDK:
             message.motor_state[slot] = SimpleNamespace(mode=self.motor_modes[offset],
                                                        q=self.q[offset], dq=self.dq[offset])
         for subscriber in self.subscribers:
-            if not subscriber.closed and subscriber.topic == "rt/lowstate":
+            if not subscriber.closed and subscriber.topic == LOWSTATE_TOPIC:
                 subscriber.callback(message)
 
     def _advance(self, duration):
@@ -138,7 +141,7 @@ class SimulatedSDK:
         self._publish_state()
         if self.external_commands:
             for subscriber in self.subscribers:
-                if not subscriber.closed and subscriber.topic == "rt/arm_sdk":
+                if not subscriber.closed and subscriber.topic == ARM_COMMAND_TOPIC:
                     subscriber.callback(self.LowCmd())
 
 

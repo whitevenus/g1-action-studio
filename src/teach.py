@@ -1,6 +1,5 @@
 """Arm7 手把手示教候选：显式接管、低刚度记录、原位释放。"""
 
-import json
 import math
 import signal
 import time
@@ -8,42 +7,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event, Lock
 
-from . import ARM_SLOTS, JOINT_NAMES, PROFILE, WEIGHT_SLOT
-from .preflight import _read_arm_service, _read_control_state
-
-# 控制循环目标间隔为20毫秒，大约50Hz。
-PERIOD = 0.02
-# 状态数据如果超过250毫秒就认为过期
-STATE_TIMEOUT = 0.25
-# 左右关节：15～21、22～28
-LEFT = tuple(range(15, 22))
-RIGHT = tuple(range(22, 29))
-
-
-def load_profile(path, target_stage="record"):
-    """检查候选参数；数值检查不代表本机已验收。hold 不需要示教增益。"""
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
-    required = ("hold_kp", "hold_kd")
-    if target_stage != "hold":
-        required += ("teach_kp", "teach_kd")
-    if data.get("schema") != "g1-arm7-teach-profile-v1" or data.get("target_profile") != PROFILE:
-        raise ValueError("示教参数文件的格式或目标机型不匹配")
-    for key in required:
-        value = data.get(key)
-        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
-            raise ValueError("示教参数 {} 必须是正的有限数".format(key))
-    if target_stage != "hold" and data["teach_kp"] >= data["hold_kp"]:
-        raise ValueError("示教刚度须小于保持刚度")
-    if target_stage != "hold" and data["teach_kd"] > data["hold_kd"]:
-        raise ValueError("示教阻尼不得大于保持阻尼")
-    if data["hold_kp"] > 60 or data["hold_kd"] > 3:
-        raise ValueError("保持增益超过候选程序上限")
-    if target_stage != "hold" and (data["teach_kp"] > 20 or data["teach_kd"] > 2):
-        raise ValueError("示教增益超过候选程序上限")
-    result = {key: float(data[key]) for key in required}
-    if target_stage == "hold":
-        result.update(teach_kp=result["hold_kp"], teach_kd=result["hold_kd"])
-    return result
+from .constants import (
+    ARM_COMMAND_TOPIC, ARM_SLOTS, DT, EXPECTED_MODE, JOINT_NAMES, LEFT, LOWSTATE_TOPIC, PROFILE,
+    RECORDING_SCHEMA, RIGHT, STATE_TIMEOUT, WEIGHT_SLOT,
+)
+from .files import write_json
+from .profiles import load_teach_profile as load_profile
+from .unitree_binding import (arm_snapshot, close_channels, create_service_clients,
+                             read_arm_service, read_control_state)
 
 
 def validate_snapshot(snapshot, baseline_modes):
@@ -57,7 +28,7 @@ def validate_snapshot(snapshot, baseline_modes):
     age = time.monotonic() - snapshot["at"]
     if not math.isfinite(age) or not 0 <= age <= STATE_TIMEOUT:
         raise RuntimeError("rt/lowstate 已超时或时间戳无效")
-    if (snapshot["mode_pr"], snapshot["mode_machine"]) != (0, 5):
+    if (snapshot["mode_pr"], snapshot["mode_machine"]) != EXPECTED_MODE:
         raise RuntimeError("机器人模式已改变")
     if snapshot["motor_modes"] != baseline_modes:
         raise RuntimeError("手臂电机模式已改变")
@@ -81,10 +52,7 @@ class SdkArmPort:
             raise
 
     def _initialize(self, interface):
-        from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import MotionSwitcherClient
         from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelPublisher, ChannelSubscriber
-        from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
-        from unitree_sdk2py.go2.robot_state.robot_state_client import RobotStateClient
         from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_
         from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_
         from unitree_sdk2py.utils.crc import CRC
@@ -100,31 +68,16 @@ class SdkArmPort:
         # 进入执行模式后才创建rt/arm_sdk发布者
         self.publisher_type = ChannelPublisher
         self.crc = CRC()
-        self.subscriber = ChannelSubscriber("rt/lowstate", LowState_)
+        self.subscriber = ChannelSubscriber(LOWSTATE_TOPIC, LowState_)
         self.subscriber.Init(self._on_state, 10)
-        self.arm_subscriber = ChannelSubscriber("rt/arm_sdk", LowCmd_)
+        self.arm_subscriber = ChannelSubscriber(ARM_COMMAND_TOPIC, LowCmd_)
         self.arm_subscriber.Init(self._on_arm_command, 10)
-        self.loco = LocoClient()
-        self.loco.SetTimeout(2.0)
-        self.loco.Init()
-        self.switcher = MotionSwitcherClient()
-        self.switcher.SetTimeout(2.0)
-        self.switcher.Init()
-        self.robot_state = RobotStateClient()
-        self.robot_state.SetTimeout(2.0)
-        self.robot_state.Init()
+        self.loco, self.switcher, self.robot_state = create_service_clients()
 
     def _on_state(self, message):
         if len(message.motor_state) <= ARM_SLOTS[-1]:
             return
-        motors = [message.motor_state[index] for index in ARM_SLOTS]
-        snapshot = {
-            "at": time.monotonic(), "mode_pr": int(message.mode_pr),
-            "mode_machine": int(message.mode_machine),
-            "motor_modes": tuple(int(m.mode) for m in motors),
-            "q": tuple(float(m.q) for m in motors),
-            "dq": tuple(float(m.dq) for m in motors),
-        }
+        snapshot = arm_snapshot(message, time)
         with self.lock:
             self.latest = snapshot
         self.ready.set()
@@ -142,8 +95,8 @@ class SdkArmPort:
             return self.other_commands
 
     def check_services(self):
-        control = _read_control_state(self.loco, self.switcher)
-        arm = _read_arm_service(self.robot_state)
+        control = read_control_state(self.loco, self.switcher)
+        arm = read_arm_service(self.robot_state)
         if control != {"motion_service": "ai", "fsm_id": 501}:
             raise RuntimeError("运控状态不符合本机候选条件：{}".format(control))
         if arm is None or arm["status"] != 0:
@@ -151,7 +104,7 @@ class SdkArmPort:
         return control, arm
 
     def start_publisher(self):
-        self.publisher = self.publisher_type("rt/arm_sdk", self.message_type)
+        self.publisher = self.publisher_type(ARM_COMMAND_TOPIC, self.message_type)
         self.publisher.Init()
 
     def write(self, positions, hold_kp, hold_kd, teach_kp, teach_kd, side, weight):
@@ -171,16 +124,7 @@ class SdkArmPort:
             raise RuntimeError("rt/arm_sdk 命令发送失败")
 
     def close(self):
-        errors = []
-        for name in ("publisher", "arm_subscriber", "subscriber"):
-            resource = getattr(self, name, None)
-            if resource is not None:
-                try:
-                    resource.Close()
-                except Exception as error:
-                    errors.append("{}：{}".format(name, error))
-                finally:
-                    setattr(self, name, None)
+        errors = close_channels(self)
         if errors:
             raise RuntimeError("关闭通信失败：" + "；".join(errors))
 
@@ -251,7 +195,7 @@ def teach(interface, side, seconds, output, profile_path, execute=False, target_
     # 按时间渐变一个阶段
     def phase(duration, weight_start, weight_end,
               kp_start, kp_end, kd_start, kd_end, capture=False, follow_measured=False):
-        steps = max(1, round(duration / PERIOD))
+        steps = max(1, round(duration / DT))
         began = time.monotonic()
         for step in range(steps + 1):
             ratio = step / steps
@@ -266,7 +210,7 @@ def teach(interface, side, seconds, output, profile_path, execute=False, target_
                                 "mode_machine": snapshot["mode_machine"],
                                 "q": list(snapshot["q"]), "dq": list(snapshot["dq"])})
             # 安排下一次循环（尽量维持指定hz）
-            delay = began + (step + 1) * PERIOD - time.monotonic()
+            delay = began + (step + 1) * DT - time.monotonic()
             if step < steps and delay > 0:
                 time.sleep(delay)
 
@@ -341,7 +285,7 @@ def teach(interface, side, seconds, output, profile_path, execute=False, target_
                         port.write(release_q, profile["hold_kp"], profile["hold_kd"],
                                    gain, damping, side, weight)
                         if step < 100:
-                            time.sleep(PERIOD)
+                            time.sleep(DT)
                     print("已请求交还手臂权重；请现场确认手臂和机体状态。", flush=True)
             except Exception as error:
                 release_sent = False
@@ -379,7 +323,7 @@ def teach(interface, side, seconds, output, profile_path, execute=False, target_
     if len(samples) < 2:
         raise RuntimeError("录制样本不足，未保存可用记录")
     payload = {
-        "schema": "g1-arm7-state-recording-v1",
+        "schema": RECORDING_SCHEMA,
         "qualification": "raw_observation_not_executable",
         "target_profile": PROFILE,
         "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -390,8 +334,6 @@ def teach(interface, side, seconds, output, profile_path, execute=False, target_
         "messages_received": len(samples), "invalid_messages": 0,
         "samples": samples,
     }
-    with output.open("x", encoding="utf-8") as stream:
-        json.dump(payload, stream, ensure_ascii=False, separators=(",", ":"))
-        stream.write("\n")
+    write_json(payload, output, allow_nan=True)
     return {"path": str(output), "samples": len(samples),
             "qualification": payload["qualification"]}

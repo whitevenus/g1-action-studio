@@ -1,17 +1,18 @@
 """单次单臂回放入口；只有 execute=True 才加载 SDK 并初始化 DDS。"""
 
-import json
 import signal
 import time
 from pathlib import Path
 from threading import Event
 
-from . import ARM_SLOTS, PROFILE
+from .constants import ARM_SLOTS, EXPECTED_MODE, EXPECTED_MOTOR_MODES, PROFILE
 from .author import build_draft
-from .executor import execute_replay, validate_profile
+from .executor import execute_replay
+from .files import dump_json
+from .profiles import load_replay_profile
 from .replay import create_plan
 from .replay_sdk import ReplaySdkPort
-from .teach import load_profile, validate_snapshot
+from .teach import validate_snapshot
 
 
 def _make_sdk(interface):
@@ -27,20 +28,28 @@ def _baseline(q, provenance):
             "arm_slots": list(ARM_SLOTS), "q": list(q), "provenance": provenance}
 
 
+def _plan(draft, baseline, profile, model, speed_scale, side, error_prefix="离线轨迹"):
+    plan = create_plan(
+        draft, baseline, model,
+        profile["max_target_velocity_rad_s"], profile["max_target_acceleration_rad_s2"],
+        speed_scale=speed_scale, side=side,
+    )
+    if plan["status"] != "offline_numerical_pass":
+        raise ValueError("{}筛查失败：{}".format(error_prefix, plan["violations"]))
+    return plan
+
+
 def _execute(interface, draft, profile, model, speed_scale, side, stop):
     port = ReplaySdkPort(_make_sdk(interface), time)
     try:
         if not port.wait_ready(5.0, stop):
             raise RuntimeError("等待初始状态超时或操作员已请求停止")
         state = port.snapshot()
-        validate_snapshot(state, (1,) * 14)
+        validate_snapshot(state, EXPECTED_MOTOR_MODES)
         # 接管和最终回位均使用本次反馈，另一侧全程保持此位置。
         baseline = _baseline(state["q"], "本次执行前 rt/lowstate 实测姿态")
-        plan = create_plan(draft, baseline, model,
-                           profile["max_target_velocity_rad_s"], profile["max_target_acceleration_rad_s2"],
-                           speed_scale=speed_scale, side=side)
-        if plan["status"] != "offline_numerical_pass":
-            raise ValueError("当前姿态生成的回放计划筛查失败：{}".format(plan["violations"]))
+        plan = _plan(draft, baseline, profile, model, speed_scale, side,
+                     error_prefix="当前姿态生成的回放计划")
         print("现场规划完成：{} 臂单次回放，目标序列 {:.2f} 秒；先执行接管前预检。".format(
             side, plan["metrics"]["duration_s"]), flush=True)
         report = execute_replay(plan, profile, lambda: port, time, stop)
@@ -60,16 +69,12 @@ def replay(interface, source, profile_path, model, output, side="left",
     source = Path(source)
     draft = build_draft(source, None, None, "trial." + side + "_replay", 1,
                         "单臂示教回放试验", allow_synthetic=not execute)
-    if (draft["observed_mode_pr"], draft["observed_mode_machine"]) != (0, 5):
+    if (draft["observed_mode_pr"], draft["observed_mode_machine"]) != EXPECTED_MODE:
         raise ValueError("录制模式不符合 0/5")
-    load_profile(profile_path, "hold")
-    profile = validate_profile(json.loads(Path(profile_path).read_text(encoding="utf-8-sig")))
+    profile = load_replay_profile(profile_path)
     # 先做离线筛查，拒绝不可用的轨迹，再允许导入真机 SDK。
-    plan = create_plan(draft, _baseline(draft["frames"][0]["q"], "录制首帧，仅供离线预览"), model,
-                       profile["max_target_velocity_rad_s"], profile["max_target_acceleration_rad_s2"],
-                       speed_scale=speed_scale, side=side)
-    if plan["status"] != "offline_numerical_pass":
-        raise ValueError("离线轨迹筛查失败：{}".format(plan["violations"]))
+    baseline = _baseline(draft["frames"][0]["q"], "录制首帧，仅供离线预览")
+    plan = _plan(draft, baseline, profile, model, speed_scale, side)
     stop = Event()
     # 提前独占新报告路径，避免发送指令后才发现输出文件不能创建。
     with Path(output).open("x", encoding="utf-8") as stream:
@@ -90,8 +95,7 @@ def replay(interface, source, profile_path, model, output, side="left",
             report = {"status": "preview", "qualification": "offline_only_not_executable", "plan": plan}
         report.update(hardware_enabled=execute, side=side, speed_scale=speed_scale,
                       source_file=source.name, execution_profile=profile)
-        json.dump(report, stream, ensure_ascii=False, indent=2, allow_nan=False)
-        stream.write("\n")
+        dump_json(report, stream)
     return {"path": str(output), "status": report["status"], "hardware_enabled": execute,
             "qualification": report["qualification"], "side": side,
             "speed_scale": speed_scale,

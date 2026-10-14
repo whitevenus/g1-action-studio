@@ -9,7 +9,8 @@ from unittest.mock import patch
 
 from g1_action_studio import ARM_SLOTS, PROFILE
 from g1_action_studio.dev_cli import main
-from g1_action_studio.author import _frame_digest, write_draft
+from g1_action_studio.trajectory import frame_digest
+from g1_action_studio.author import write_draft
 from g1_action_studio.author import validate_draft
 from g1_action_studio.replay import (
     DEFAULT_MODEL, build_schedule, load_baseline, load_limits, plan_replay,
@@ -29,7 +30,7 @@ def fixture(folder):
     draft = {"schema": "g1-arm7-action-draft-v1", "qualification": "draft_unqualified_not_executable",
              "hardware_enabled": False, "target_profile": PROFILE, "arm_slots": list(ARM_SLOTS),
              "action_code": "classroom.test", "action_version": 1,
-             "frames": frames, "trajectory_sha256": _frame_digest(frames)}
+             "frames": frames, "trajectory_sha256": frame_digest(frames)}
     baseline = {"schema": "g1-arm7-replay-baseline-v1", "target_profile": PROFILE,
                 "arm_slots": list(ARM_SLOTS), "provenance": "合成测试姿态，不用于真机", "q": [0.0] * 14}
     draft_path, baseline_path = Path(folder) / "draft.json", Path(folder) / "baseline.json"

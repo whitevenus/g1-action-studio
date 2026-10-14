@@ -4,8 +4,9 @@ import argparse
 import json
 import sys
 
-from .author import audit_draft, build_draft, write_draft
-from .replay import DEFAULT_MODEL
+from .constants import DEFAULT_MODEL
+from .author import audit_draft, build_draft
+from .files import read_json, write_json
 from . import __version__
 
 
@@ -83,7 +84,7 @@ def main(argv=None):
         elif args.command == "build":
             draft = build_draft(args.source, args.start, args.end,
                                 args.code, args.version, args.name)
-            write_draft(draft, args.output)
+            write_json(draft, args.output)
             summary = {"path": args.output, "qualification": draft["qualification"],
                        "trajectory_sha256": draft["trajectory_sha256"],
                        "metrics": draft["metrics"]}
@@ -95,9 +96,8 @@ def main(argv=None):
             summary = replay(args.interface, args.source, args.profile, args.model,
                              args.output, args.side, args.speed_scale, args.execute)
         elif args.command == "transition":
-            from pathlib import Path
             from .transition import plan_transition
-            body_q = None if args.body_pose is None else json.loads(Path(args.body_pose).read_text(encoding="utf-8-sig"))
+            body_q = None if args.body_pose is None else read_json(args.body_pose)
             summary = plan_transition(args.before, args.after, args.output, args.side, args.speed_scale,
                                       args.clearance, args.max_velocity, args.max_acceleration, args.seed, body_q)
             summary["path"] = args.output

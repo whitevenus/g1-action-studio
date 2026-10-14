@@ -1,6 +1,74 @@
 """真实 Unitree SDK 接口绑定；默认禁用网络，导入和构造消息不初始化 DDS。"""
 
-from .preflight import _read_arm_service, _read_control_state
+import time
+
+from .constants import ARM_SLOTS
+
+
+def read_control_state(loco, switcher):
+    for attempt in range(3):
+        code, mode = switcher.CheckMode()
+        # SDK 的 3104 表示等待 RPC 回复超时；只重试只读查询。
+        if code != 3104 or attempt == 2:
+            break
+        print("CheckMode 查询超时，稍后进行第 {} 次只读查询。".format(attempt + 2), flush=True)
+        time.sleep(0.5)
+    if code != 0 or not isinstance(mode, dict) or not isinstance(mode.get("name"), str):
+        raise RuntimeError("CheckMode 失败：返回码={!r}，数据={!r}".format(code, mode))
+    code, fsm_id = loco.GetFsmId()
+    if code != 0 or type(fsm_id) is not int:
+        raise RuntimeError("GetFsmId 失败：返回码={!r}，数据={!r}".format(code, fsm_id))
+    return {"motion_service": mode["name"], "fsm_id": fsm_id}
+
+
+def read_arm_service(robot_state):
+    code, services = robot_state.ServiceList()
+    if code != 0 or services is None:
+        raise RuntimeError("ServiceList 失败：返回码={!r}".format(code))
+    for service in services:
+        if service.name == "g1_arm_example":
+            return {"name": service.name, "status": service.status,
+                    "protect": service.protect}
+    return None
+
+
+def create_service_clients():
+    """构造客户端会创建 RPC 通道；仅在网络已初始化后调用。"""
+    from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
+    from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import MotionSwitcherClient
+    from unitree_sdk2py.go2.robot_state.robot_state_client import RobotStateClient
+
+    clients = []
+    for factory in (LocoClient, MotionSwitcherClient, RobotStateClient):
+        client = factory()
+        client.SetTimeout(2.0)
+        client.Init()
+        clients.append(client)
+    return tuple(clients)
+
+
+def arm_snapshot(message, clock):
+    motors = [message.motor_state[i] for i in ARM_SLOTS]
+    return {"at": clock.monotonic(), "mode_pr": int(message.mode_pr),
+            "mode_machine": int(message.mode_machine),
+            "motor_modes": tuple(int(m.mode) for m in motors),
+            "q": tuple(float(m.q) for m in motors),
+            "dq": tuple(float(m.dq) for m in motors)}
+
+
+def close_channels(port):
+    """逐个关闭并清空通道；单个失败不能阻止其余通道清理。"""
+    errors = []
+    for name in ("publisher", "arm_subscriber", "subscriber"):
+        resource = getattr(port, name, None)
+        if resource is not None:
+            try:
+                resource.Close()
+            except Exception as error:
+                errors.append("{}：{}".format(name, error))
+            finally:
+                setattr(port, name, None)
+    return errors
 
 
 class UnitreeReplaySDK:
@@ -50,18 +118,10 @@ class UnitreeReplaySDK:
             raise RuntimeError("离线模式禁止创建真实 RPC 客户端")
         if self.service_clients is not None:
             raise RuntimeError("RPC 客户端已提供")
-        from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
-        from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import MotionSwitcherClient
-        from unitree_sdk2py.go2.robot_state.robot_state_client import RobotStateClient
-        # 这些客户端的构造函数本身会创建通信通道，不能在离线加载时构造。
-        loco, switcher, robot_state = LocoClient(), MotionSwitcherClient(), RobotStateClient()
-        for client in (loco, switcher, robot_state):
-            client.SetTimeout(2.0)
-            client.Init()
-        self.service_clients = (loco, switcher, robot_state)
+        self.service_clients = create_service_clients()
 
     def read_services(self):
         if self.service_clients is None:
             raise RuntimeError("未提供服务查询客户端；离线验证须显式注入替身")
         loco, switcher, robot_state = self.service_clients
-        return _read_control_state(loco, switcher), _read_arm_service(robot_state)
+        return read_control_state(loco, switcher), read_arm_service(robot_state)
