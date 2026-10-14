@@ -6,7 +6,7 @@
 
 ## 项目结构
 
-源码直接放在 `src/`，按功能分文件；没有额外的 `g1_action_studio/` 或 `development/` 目录。
+源码直接放在 `src/`，按功能分文件；
 
 ```text
 src/        源码和模型资源
@@ -16,26 +16,28 @@ docs/       代码导航与避碰说明
 data/       个人录制和验证输出
 ```
 
-安装后的包名仍为 `g1_action_studio`，由 `pyproject.toml` 映射，不需要照搬包名作为源码目录。
-修改源码后可直接在项目根目录运行 `python -m src --help`；正式命令与测试请先完成下面的安装。
-
 Python 3.8 及以上。基础离线工具只用标准库；避碰规划需 Python 3.10+ 和可选 MuJoCo 依赖。真机功能需要另外安装官方 `unitree_sdk2py` 和兼容的 CycloneDDS。不要把 Python 包版本兼容等同于机器人固件兼容。
 
-## 安装
+## 安装与运行
+
+在项目根目录执行：
 
 ```bash
-python -m pip install -e .
-g1-action-studio --help
+uv sync
+uv run g1-action-studio --help
+uv run g1-action-studio-dev --help
 ```
 
-也可用 `python -m g1_action_studio`。真机 SDK 按[宇树官方说明](https://github.com/unitreerobotics/unitree_sdk2_python)安装，本项目不附带厂商源码或二进制。
+开发依赖：`uv sync --extra dev`。避碰规划依赖见下方示例。
+
+真机 SDK 按[宇树官方说明](https://github.com/unitreerobotics/unitree_sdk2_python)安装到项目 `.venv/`，本项目不附带厂商源码或二进制。
 
 ## 先体验离线预览
 
 项目根目录已有 `data/`，用于保存个人记录，默认不进入版本控制：
 
 ```bash
-g1-action-studio replay unused examples/synthetic-recording.json \
+uv run g1-action-studio replay unused examples/synthetic-recording.json \
   --side left --profile examples/profiles/replay.json \
   --output data/example-preview.json
 ```
@@ -47,8 +49,8 @@ g1-action-studio replay unused examples/synthetic-recording.json \
 动作之间的避碰衔接使用离线命令，见[离线过渡说明](docs/transitions.md)：
 
 ```bash
-python -m pip install -e '.[planning]'
-g1-action-studio transition examples/transition/action-a.json examples/transition/action-b.json \
+uv sync --extra planning
+uv run --extra planning g1-action-studio transition examples/transition/action-a.json examples/transition/action-b.json \
   --side left --seed 5 --output data/transition-preview.json
 ```
 
@@ -63,7 +65,7 @@ g1-action-studio transition examples/transition/action-a.json examples/transitio
 `eth0` 只是网卡示例，使用本机实际的 DDS 网卡：
 
 ```bash
-g1-action-studio preflight eth0 --seconds 10 --output data/preflight-001.json
+uv run g1-action-studio preflight eth0 --seconds 10 --output data/preflight-001.json
 ```
 
 只查询运控及 `g1_arm_example` 服务状态，订阅状态和手臂命令。不会切模式、关闭服务或请求动作。`CheckMode` 返回 RPC 超时 3104 时只读查询最多三次，失败仍停止。零条手臂命令不证明独占控制。
@@ -79,7 +81,7 @@ g1-action-studio preflight eth0 --seconds 10 --output data/preflight-001.json
 先不带 `--execute` 检查参数，再按 `hold → soften → record` 验证。下面是完整示教命令形式；替换为自己的参数后才在现场执行：
 
 ```bash
-g1-action-studio teach eth0 --side left --stage record --seconds 10 \
+uv run g1-action-studio teach eth0 --side left --stage record --seconds 10 \
   --profile data/my-soften-profile.json --output data/recording-001.json --execute
 ```
 
@@ -92,7 +94,7 @@ g1-action-studio teach eth0 --side left --stage record --seconds 10 \
 先运行离线预览：
 
 ```bash
-g1-action-studio replay eth0 data/recording-001.json --side left \
+uv run g1-action-studio replay eth0 data/recording-001.json --side left \
   --profile data/my-replay-profile.json --speed-scale 0.5 \
   --output data/replay-preview-001.json
 ```
@@ -100,7 +102,7 @@ g1-action-studio replay eth0 data/recording-001.json --side left \
 确认后换新的输出路径并加 `--execute`。回放时不要手拖或强行托推手臂：
 
 ```bash
-g1-action-studio replay eth0 data/recording-001.json --side left \
+uv run g1-action-studio replay eth0 data/recording-001.json --side left \
   --profile data/my-replay-profile.json --speed-scale 0.5 \
   --output data/replay-trial-001.json --execute
 ```

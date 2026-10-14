@@ -9,7 +9,7 @@ description = "宇树 G1 Arm7 动作预检、录制、示教与回放工具"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {file = "LICENSE"}
-authors = [{name = "G1 Action Studio contributors"}]
+authors = [{name = "whitevneus"}]
 dependencies = []
 classifiers = [
   "Programming Language :: Python :: 3",
@@ -20,7 +20,7 @@ classifiers = [
 
 [project.optional-dependencies]
 dev = ["build>=1.0"]
-planning = ["mujoco>=3.3.7,<4"]
+planning = ["mujoco>=3.3.7,<4; python_version >= '3.10'"]
 
 [project.scripts]
 g1-action-studio = "g1_action_studio.cli:main"
