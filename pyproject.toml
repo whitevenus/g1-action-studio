@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "g1-action-studio"
+version = "0.1.0"
+description = "宇树 G1 Arm7 动作预检、录制、示教与回放工具"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {file = "LICENSE"}
+authors = [{name = "G1 Action Studio contributors"}]
+dependencies = []
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+
+[project.optional-dependencies]
+dev = ["build>=1.0"]
+planning = ["mujoco>=3.3.7,<4"]
+
+[project.scripts]
+g1-action-studio = "g1_action_studio.cli:main"
+g1-action-studio-dev = "g1_action_studio.dev_cli:main"
+
+[tool.setuptools]
+packages = ["g1_action_studio"]
+package-dir = {g1_action_studio = "src"}
+include-package-data = false
+license-files = ["LICENSE", "LICENSE-UNITREE", "LICENSE-UNITREE-MODEL", "LICENSE-APACHE-2.0"]
+
+[tool.setuptools.package-data]
+g1_action_studio = ["resources/*.xml", "resources/collision/*.xml", "resources/collision/*.json", "resources/collision/meshes/*.STL"]

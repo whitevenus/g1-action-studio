@@ -1,0 +1,8 @@
+include LICENSE LICENSE-UNITREE THIRD_PARTY_NOTICES.md
+include LICENSE-UNITREE-MODEL LICENSE-APACHE-2.0
+include README.md CONTRIBUTING.md
+recursive-include src/resources *.xml
+recursive-include src/resources/collision *.STL *.json
+recursive-include examples *.json
+recursive-include docs *.md
+recursive-include tests *.py

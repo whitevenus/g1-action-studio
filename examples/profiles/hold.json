@@ -1,0 +1,9 @@
+{
+  "schema": "g1-arm7-teach-profile-v1",
+  "target_profile": "unitree-g1-arm7-29dof",
+  "intended_stage": "hold",
+  "hold_kp": 60.0,
+  "hold_kd": 1.5,
+  "qualification": "example_not_hardware_qualified",
+  "notes": "格式与参数示例，未对你的设备验收；不得把示例数值当作通用安全参数。"
+}
