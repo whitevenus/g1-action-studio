@@ -7,22 +7,8 @@ import xml.etree.ElementTree as ET
 
 from .constants import ARM_SLOTS, DEFAULT_MODEL, DT, JOINT_NAMES, PLAN_SCHEMA, PROFILE
 from .author import validate_draft
-from .files import read_json
 from .trajectory import (finite_vector, frame_digest, hold_other_arm, interpolate_positions,
                          joint_motion, metrics, smoothstep)
-
-
-def load_baseline(path):
-    data = read_json(path)
-    if (not isinstance(data, dict)
-            or data.get("schema") != "g1-arm7-replay-baseline-v1"
-            or data.get("target_profile") != PROFILE
-            or data.get("arm_slots") != list(ARM_SLOTS)):
-        raise ValueError("回放基线必须显式提供 Arm7 J15–J28 配置")
-    if not isinstance(data.get("provenance"), str) or not data["provenance"].strip():
-        raise ValueError("基线必须填写 provenance，说明姿态来源和时间")
-    data["q"] = finite_vector(data.get("q"))
-    return data
 
 
 def load_limits(path):
@@ -162,19 +148,10 @@ def screen_schedule(frames, limits, max_velocity, max_acceleration):
     return {"metrics": computed, "per_joint": per_joint, "violations": violations}
 
 
-def plan_replay(draft_path, baseline_path, model_path, max_velocity, max_acceleration,
-                takeover=3.0, enter=5.0, return_seconds=5.0, release=2.0):
-    # 用同一份草稿快照进行完整性检查与规划，避免两次读文件结果不同。
-    data = read_json(draft_path)
-    baseline = load_baseline(baseline_path)
-    return create_plan(data, baseline, model_path, max_velocity, max_acceleration,
-                       takeover, enter, return_seconds, release)
-
-
 def create_plan(data, baseline, model_path, max_velocity, max_acceleration,
                 takeover=3.0, enter=5.0, return_seconds=5.0, release=2.0,
                 speed_scale=None, side=None):
-    """文件规划和现场规划共用；现场基线由只读反馈提供。"""
+    """离线预览和现场规划共用；现场基线由只读反馈提供。"""
     validate_draft(data)
     q = finite_vector(baseline["q"])
     limits = load_limits(model_path)

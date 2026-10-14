@@ -5,7 +5,7 @@ import math
 from .constants import (
     ARM_JOINT_COUNT, ARM_SLOTS, DT, EXPECTED_MODE, EXPECTED_MOTOR_MODES, PLAN_SCHEMA, PROFILE,
 )
-from .profiles import validate_replay_profile as validate_profile
+from .config import validate_replay_profile
 from .trajectory import frame_digest
 from .replay import sample_schedule, screen_schedule
 
@@ -58,7 +58,7 @@ def validate_plan(plan):
 
 def execute_replay(plan, profile, port_factory, clock, stop):
     """端口负责 SDK 边界；运行结果只报告发送和反馈，不宣称控制权已交接。"""
-    profile = validate_profile(profile)
+    profile = validate_replay_profile(profile)
     frames, limits = validate_plan(plan)
     times = [frame["t"] for frame in frames]
     release_index = next(i for i, frame in enumerate(frames) if frame["phase"] == "release")

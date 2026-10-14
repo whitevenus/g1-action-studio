@@ -4,7 +4,8 @@ import unittest
 from pathlib import Path
 
 from g1_action_studio import ARM_SLOTS, PROFILE
-from g1_action_studio.author import audit_draft, build_draft, write_draft
+from g1_action_studio.author import audit_draft, build_draft
+from g1_action_studio.config import write_json
 
 
 TEST_ROOT = Path(__file__).resolve().parent
@@ -39,10 +40,10 @@ class DraftTests(unittest.TestCase):
             self.assertEqual(draft["metrics"]["frame_count"], 51)
             self.assertAlmostEqual(draft["metrics"]["start_end_max_error_rad"], 0)
             self.assertGreater(draft["metrics"]["max_excursion_from_start_rad"], 0)
-            write_draft(draft, output)
+            write_json(draft, output)
             self.assertEqual(audit_draft(output), draft["metrics"])
             with self.assertRaises(FileExistsError):
-                write_draft(draft, output)
+                write_json(draft, output)
 
     def test_rejects_missing_state_span(self):
         with tempfile.TemporaryDirectory(dir=TEST_ROOT) as folder:

@@ -72,7 +72,7 @@ def close_channels(port):
 
 
 class UnitreeReplaySDK:
-    def __init__(self, *, offline_transport=None, service_clients=None):
+    def __init__(self):
         from unitree_sdk2py.idl.default import (
             unitree_hg_msg_dds__LowCmd_, unitree_hg_msg_dds__LowState_,
         )
@@ -85,24 +85,21 @@ class UnitreeReplaySDK:
         self.LowCmd, self.LowState = unitree_hg_msg_dds__LowCmd_, unitree_hg_msg_dds__LowState_
         self.CRC = CRC
         self.channel = channel
-        self.offline_transport = offline_transport
-        self.service_clients = service_clients
+        self.service_clients = None
         self.network_initialized = False
 
     def initialize_network(self, interface, domain=0, *, allow_network=False):
         """真机回放的显式网络边界；离线入口不会调用此方法。"""
         if not allow_network:
             raise RuntimeError("网络初始化未授权；默认仅允许离线报文验证")
-        if self.offline_transport is not None or self.network_initialized:
-            raise RuntimeError("离线绑定或已初始化绑定不能重新初始化网络")
+        if self.network_initialized:
+            raise RuntimeError("已初始化绑定不能重新初始化网络")
         if not isinstance(interface, str) or not interface.strip() or type(domain) is not int or domain < 0:
             raise ValueError("DDS 网卡或域无效")
         self.channel.ChannelFactoryInitialize(domain, interface)
         self.network_initialized = True
 
     def _channels(self):
-        if self.offline_transport is not None:
-            return self.offline_transport
         if not self.network_initialized:
             raise RuntimeError("DDS 未初始化；拒绝创建真实通道")
         return self.channel
@@ -114,7 +111,7 @@ class UnitreeReplaySDK:
         return self._channels().ChannelPublisher(topic, message_type)
 
     def initialize_service_clients(self):
-        if not self.network_initialized or self.offline_transport is not None:
+        if not self.network_initialized:
             raise RuntimeError("离线模式禁止创建真实 RPC 客户端")
         if self.service_clients is not None:
             raise RuntimeError("RPC 客户端已提供")
@@ -122,6 +119,6 @@ class UnitreeReplaySDK:
 
     def read_services(self):
         if self.service_clients is None:
-            raise RuntimeError("未提供服务查询客户端；离线验证须显式注入替身")
+            raise RuntimeError("未初始化服务查询客户端")
         loco, switcher, robot_state = self.service_clients
         return read_control_state(loco, switcher), read_arm_service(robot_state)

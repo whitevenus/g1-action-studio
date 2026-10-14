@@ -25,7 +25,6 @@ Python 3.8 及以上。基础离线工具只用标准库；避碰规划需 Pytho
 ```bash
 uv sync
 uv run g1-action-studio --help
-uv run g1-action-studio-dev --help
 ```
 
 开发依赖：`uv sync --extra dev`。避碰规划依赖见下方示例。
@@ -113,7 +112,7 @@ Ctrl+C 请求取消，状态可信时固定当前位置尝试释放。状态失�
 
 ## 开发与能力范围
 
-离线调度、故障模拟和 SDK 报文审计使用 `g1-action-studio-dev`，见[开发说明](CONTRIBUTING.md)。
+回归测试使用 `tests/` 中的内存替身，不连接机器人，见[开发说明](CONTRIBUTING.md)。
 源码调用路径见[代码导航](docs/architecture.md)。项目不附带真实录制、设备凭据或厂商 SDK。
 
 目前支持单机手臂动作制作，不提供 GUI、手指控制、导航、动态环境避障或平衡求解。

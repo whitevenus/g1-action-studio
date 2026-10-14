@@ -8,8 +8,7 @@ from threading import Event
 from .constants import ARM_SLOTS, EXPECTED_MODE, EXPECTED_MOTOR_MODES, PROFILE
 from .author import build_draft
 from .executor import execute_replay
-from .files import dump_json
-from .profiles import load_replay_profile
+from .config import dump_json, load_replay_profile
 from .replay import create_plan
 from .replay_sdk import ReplaySdkPort
 from .teach import validate_snapshot

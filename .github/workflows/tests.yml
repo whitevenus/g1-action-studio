@@ -14,7 +14,6 @@ jobs:
       - run: python -m pip install .
       - run: python -m unittest discover -s tests -v
       - run: g1-action-studio --help
-      - run: g1-action-studio-dev --help
   collision:
     runs-on: ubuntu-latest
     steps:

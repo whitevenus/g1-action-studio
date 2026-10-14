@@ -8,7 +8,7 @@ from bisect import bisect_right
 from pathlib import Path
 
 from .constants import ARM_SLOTS, DRAFT_SCHEMA, DT, JOINT_NAMES, PROFILE, RECORDING_SCHEMA
-from .files import read_json, write_json as write_draft
+from .config import read_json
 from .trajectory import finite_vector, frame_digest, interpolate_positions, metrics
 
 

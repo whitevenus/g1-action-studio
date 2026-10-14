@@ -1,9 +1,25 @@
-"""示教与回放参数校验；同一份 JSON 快照完成全部检查。"""
+"""参数校验与 JSON 读写；同一份快照检查，新文件禁止覆盖。"""
 
+import json
 import math
+from pathlib import Path
 
 from .constants import DT, PROFILE, PROFILE_SCHEMA
-from .files import read_json
+
+
+def read_json(path, *, encoding="utf-8-sig"):
+    return json.loads(Path(path).read_text(encoding=encoding))
+
+
+def dump_json(data, stream, *, compact=False, allow_nan=False):
+    options = {"separators": (",", ":")} if compact else {"indent": 2}
+    json.dump(data, stream, ensure_ascii=False, allow_nan=allow_nan, **options)
+    stream.write("\n")
+
+
+def write_json(data, output, *, compact=True, allow_nan=False):
+    with Path(output).open("x", encoding="utf-8") as stream:
+        dump_json(data, stream, compact=compact, allow_nan=allow_nan)
 
 
 def _require_positive(data, keys, message):

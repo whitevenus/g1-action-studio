@@ -1,23 +1,16 @@
-import contextlib
 import copy
-import io
-import json
 import math
 import sys
-import tempfile
 import unittest
-from pathlib import Path
 from threading import Event
 from unittest.mock import Mock, patch
 
 from g1_action_studio import ARM_SLOTS, PROFILE
-from g1_action_studio.dev_cli import main
 from g1_action_studio.trajectory import frame_digest
-from g1_action_studio.author import write_draft
 from g1_action_studio.executor import execute_replay
 from g1_action_studio.replay import DEFAULT_MODEL, build_schedule, load_limits
 from g1_action_studio.replay_sdk import ReplaySdkPort
-from g1_action_studio.simulated_sdk import SIMULATION_PROFILE, SimulatedSDK, VirtualClock, simulate_replay
+from fake_sdk import SIMULATION_PROFILE, SimulatedSDK, VirtualClock, simulate_replay
 
 
 def make_plan():
@@ -306,24 +299,13 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(report["status"], "failed")
         self.assertFalse(self.sdk.publisher_started)
 
-    def test_all_simulation_scenarios_and_cli_no_overwrite(self):
+    def test_all_simulation_scenarios_close_resources(self):
         for scenario in ("normal", "tracking-error", "state-timeout", "mode-change", "send-failure", "cancel"):
             report = simulate_replay(self.plan, scenario)
             self.assertEqual(report["status"], "completed" if scenario == "normal" else
                              "cancelled" if scenario == "cancel" else "failed")
             self.assertFalse(report["hardware_enabled"])
             self.assertTrue(report["resources_closed"])
-        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as folder:
-            plan, output = Path(folder) / "plan.json", Path(folder) / "report.json"
-            write_draft(self.plan, plan)
-            args = ["simulate-replay", str(plan), "--output", str(output)]
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                self.assertEqual(main(args), 0)
-                original = output.read_bytes()
-                self.assertEqual(main(args), 1)
-                self.assertEqual(output.read_bytes(), original)
-                self.assertEqual(main(["simulate-replay", str(plan), "--scenario", "state-timeout",
-                                       "--output", str(Path(folder) / "failure.json")]), 1)
 
 
 if __name__ == "__main__":

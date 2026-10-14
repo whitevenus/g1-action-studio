@@ -7,7 +7,7 @@ from pathlib import Path
 from threading import Lock
 
 from .constants import ARM_SLOTS, DT, JOINT_NAMES, LOWSTATE_TOPIC, PROFILE, RECORDING_SCHEMA
-from .files import write_json
+from .config import write_json
 
 
 def record(interface, seconds, output):

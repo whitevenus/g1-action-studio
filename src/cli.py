@@ -6,7 +6,7 @@ import sys
 
 from .constants import DEFAULT_MODEL
 from .author import audit_draft, build_draft
-from .files import read_json, write_json
+from .config import read_json, write_json
 from . import __version__
 
 

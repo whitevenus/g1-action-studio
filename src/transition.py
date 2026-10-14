@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .constants import ARM_OFFSETS, ARM_SLOTS, COLLISION_MODEL, DRAFT_SCHEMA, DT, PROFILE
 from .author import build_draft, validate_draft
-from .files import read_json, write_json
+from .config import read_json, write_json
 from .trajectory import hold_other_arm, interpolate_positions, metrics, smoothstep
 from .collision import COLLISION_MODEL, CollisionModel
 from .replay import retime_frames, screen_schedule

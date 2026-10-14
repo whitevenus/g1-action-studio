@@ -7,8 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from g1_action_studio.constants import DT
-from g1_action_studio.files import dump_json, write_json
-from g1_action_studio.profiles import load_replay_profile
+from g1_action_studio.config import dump_json, load_replay_profile, write_json
 from g1_action_studio.replay import screen_schedule
 from g1_action_studio.trajectory import hold_other_arm, joint_motion, metrics
 

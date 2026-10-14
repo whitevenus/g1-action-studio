@@ -13,7 +13,7 @@ from g1_action_studio import ARM_SLOTS, PROFILE
 from g1_action_studio.__main__ import main
 from g1_action_studio.live_replay import replay
 from g1_action_studio.replay import build_schedule, retime_frames, screen_schedule
-from g1_action_studio.simulated_sdk import SimulatedSDK, VirtualClock
+from fake_sdk import SimulatedSDK, VirtualClock
 
 
 class LiveReplayTests(unittest.TestCase):

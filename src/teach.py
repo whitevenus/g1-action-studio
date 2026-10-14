@@ -11,8 +11,7 @@ from .constants import (
     ARM_COMMAND_TOPIC, ARM_SLOTS, DT, EXPECTED_MODE, JOINT_NAMES, LEFT, LOWSTATE_TOPIC, PROFILE,
     RECORDING_SCHEMA, RIGHT, STATE_TIMEOUT, WEIGHT_SLOT,
 )
-from .files import write_json
-from .profiles import load_teach_profile as load_profile
+from .config import load_teach_profile as load_profile, write_json
 from .unitree_binding import (arm_snapshot, close_channels, create_service_clients,
                              read_arm_service, read_control_state)
 

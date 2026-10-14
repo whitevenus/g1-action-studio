@@ -1,15 +1,15 @@
-"""确定性模拟 SDK：内存消息/回调、简化关节滞后；没有网络和机器人接口。"""
+"""回归测试专用替身：内存消息、虚拟时钟与故障注入；不随项目安装。"""
 
 import copy
 import math
 from threading import Event
 from types import SimpleNamespace
 
-from .constants import (
+from g1_action_studio.constants import (
     ARM_COMMAND_TOPIC, ARM_SLOTS, EXPECTED_MODE, EXPECTED_MOTOR_MODES, LOWSTATE_TOPIC,
 )
-from .executor import execute_replay
-from .replay_sdk import ReplaySdkPort
+from g1_action_studio.executor import execute_replay
+from g1_action_studio.replay_sdk import ReplaySdkPort
 
 
 SIMULATION_PROFILE = {

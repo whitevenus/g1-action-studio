@@ -6,7 +6,7 @@ from pathlib import Path
 from threading import Lock
 
 from .constants import ARM_COMMAND_TOPIC, LOWSTATE_TOPIC
-from .files import write_json
+from .config import write_json
 from .unitree_binding import create_service_clients, read_arm_service, read_control_state
 
 
