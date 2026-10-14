@@ -32,7 +32,7 @@ def _plan(action, baseline, profile, model, speed_scale, side, error_prefix="离
     plan = create_plan(
         action, baseline, model,
         profile["max_target_velocity_rad_s"], profile["max_target_acceleration_rad_s2"],
-        speed_scale=speed_scale, side=side,
+        speed_scale=speed_scale, side=side, collision_check=True,
     )
     if plan["status"] != "offline_numerical_pass":
         raise ValueError("{}筛查失败：{}".format(error_prefix, plan["violations"]))
@@ -47,8 +47,8 @@ def _execute(interface, action, profile, model, speed_scale, side, stop):
         state = port.snapshot()
         validate_snapshot(state, EXPECTED_MOTOR_MODES)
         # 接管和最终回位均使用本次反馈，另一侧全程保持此位置。
-        if action["kind"] == "sequence" and state.get("body_q") is None:
-            raise RuntimeError("组合动作需要腿/腰的当前姿态反馈")
+        if state.get("body_q") is None:
+            raise RuntimeError("避碰回放需要腿/腰的当前姿态反馈")
         baseline = _baseline(state["q"], "本次执行前 rt/lowstate 实测姿态", state.get("body_q"))
         plan = _plan(action, baseline, profile, model, speed_scale, side,
                      error_prefix="当前姿态生成的回放计划")
@@ -68,19 +68,21 @@ def _execute(interface, action, profile, model, speed_scale, side, stop):
 
 def replay(interface, source, profile_path, model, output, side=None,
            speed_scale=0.5, execute=False):
-    source = Path(source)
-    action = load_action(source)
-    if execute and action["synthetic"]:
+    sources = [Path(p) for p in source] if isinstance(source, (list, tuple)) else [Path(source)]
+    if not sources:
+        raise ValueError("至少需要一个动作")
+    actions = [load_action(path) for path in sources]
+    if execute and any(action["synthetic"] for action in actions):
         raise ValueError("合成示例只供离线学习，不允许真机执行")
-    side = side or action.get("side", "left")
+    side = side or next((action["side"] for action in actions if action["kind"] == "sequence"), "left")
     if side not in ("left", "right"):
         raise ValueError("回放侧必须为 left 或 right")
-    if action["kind"] == "sequence" and side != action["side"]:
+    if any(action["kind"] == "sequence" and side != action["side"] for action in actions):
         raise ValueError("组合动作只能按制作时的回放侧执行")
     profile = load_replay_profile(profile_path)
     # 预览用首帧；执行只根据当前反馈规划一次，在发布命令前自动检查。
-    baseline = _baseline(action["frames"][0]["q"], "录制首帧，仅供离线预览")
-    plan = None if execute else _plan(action, baseline, profile, model, speed_scale, side)
+    baseline = _baseline(actions[0]["frames"][0]["q"], "录制首帧，仅供离线预览")
+    plan = None if execute else _plan(actions, baseline, profile, model, speed_scale, side)
     stop = Event()
     # 提前独占新报告路径，避免发送指令后才发现输出文件不能创建。
     with Path(output).open("x", encoding="utf-8") as stream:
@@ -89,7 +91,7 @@ def replay(interface, source, profile_path, model, output, side=None,
             try:
                 for signum in previous:
                     signal.signal(signum, lambda _signum, _frame: stop.set())
-                report = _execute(interface, action, profile, model, speed_scale, side, stop)
+                report = _execute(interface, actions, profile, model, speed_scale, side, stop)
             except (Exception, KeyboardInterrupt) as error:
                 report = {"status": "failed", "qualification": "unqualified_executor_trial",
                           "errors": [{"message": str(error) or type(error).__name__}],
@@ -100,7 +102,7 @@ def replay(interface, source, profile_path, model, output, side=None,
         else:
             report = {"status": "preview", "qualification": "offline_only_not_executable", "plan": plan}
         report.update(hardware_enabled=execute, side=side, speed_scale=speed_scale,
-                      source_file=source.name, execution_profile=profile)
+                      source_files=[path.name for path in sources], execution_profile=profile)
         dump_json(report, stream)
     return {"path": str(output), "status": report["status"], "hardware_enabled": execute,
             "qualification": report["qualification"], "side": side,

@@ -22,13 +22,18 @@ ROOT = Path(__file__).parents[1]
 
 class ActionFixtures:
     def setUp(self):
+        try:
+            from g1_action_studio.collision import CollisionModel
+            CollisionModel()
+        except ImportError as error:
+            self.skipTest(str(error))
         folder = tempfile.TemporaryDirectory(dir=Path(__file__).parent)
         self.addCleanup(folder.cleanup)
         self.root = Path(folder.name)
         self.profile = ROOT / "examples/profiles/replay.json"
         self.source = self.root / "recording.json"
         self.output = self.root / "report.json"
-        self.q = [0.2] * 7 + [0.3] * 7
+        self.q = json.loads((ROOT / "examples/transition/action-b.json").read_text())["samples"][0]["q"]
         self.record(self.source, self.q)
 
     def record(self, path, q, seconds=1.0, synthetic=False):
@@ -125,6 +130,14 @@ class CombinedFlowTests(ActionFixtures, unittest.TestCase):
         self.assertEqual(report["plan"]["body_pose"], [0.0] * 15)
         self.assertTrue(all(r.closed for r in sdk.resources))
 
+    def test_multiple_sources_are_planned_and_execute_once_without_transition(self):
+        result, sdk, report = self.execute([self.before, self.after, self.before], q=self.q)
+        self.assertEqual(result["status"], "completed", report["errors"])
+        self.assertEqual(len(report["plan"]["actions"]), 3)
+        self.assertEqual(len(report["plan"]["phases"]), 5)
+        self.assertEqual(report["source_files"], ["a.json", "b.json", "a.json"])
+        self.assertTrue(all(r.closed for r in sdk.resources))
+
     def test_wrong_side_cannot_initialize_network(self):
         action = self.combined()
         with patch("g1_action_studio.live_replay._make_sdk") as factory:
@@ -142,7 +155,7 @@ class CombinedFlowTests(ActionFixtures, unittest.TestCase):
         action = self.root / "routed.json"
         plan_transition(self.before, self.after, action, seed=5)
         self.assertGreater(load_action(action)["transition_metrics"]["duration_s"], 0)
-        result, sdk, report = self.execute(action, q=start)
+        result, sdk, report = self.execute([self.before, self.after], q=start)
         self.assertEqual(result["status"], "completed", report["errors"])
         returning = [frame for frame in report["plan"]["frames"] if frame["phase"] == "return"]
         self.assertEqual(returning[-1]["q"], start)

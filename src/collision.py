@@ -79,6 +79,8 @@ class CollisionModel:
         """检查完整轨迹和帧间运动；制作与实际回放规划共用。"""
         clearance, mount_gap = 0.5, 0.5
         for index, frame in enumerate(frames):
+            if index and frame["q"] == frames[index - 1]["q"]:
+                continue  # 原位接管、保持和释放复用前一帧的几何检查。
             check = self.clearance(frame["q"], margin)
             if not check["valid"]:
                 raise ValueError("完整动作在 {:.2f}s 碰撞或余量不足：{}".format(frame["t"], check))

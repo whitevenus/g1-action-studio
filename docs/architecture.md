@@ -12,7 +12,7 @@ src/
   config.py          示教/回放参数校验、JSON 读写和禁止覆盖
   preflight.py       只读预检
   record.py          只读状态录制
-  teach.py           接管、保持、降低刚度、录制、释放
+  teach.py           接管、回车录制、终点保持、避碰回位、释放
   author.py          加载录制或统一动作，自动裁剪/重采样
   replay.py          回放规划、时间插值和数值检查
   live_replay.py     离线预览或显式真机回放
@@ -50,8 +50,8 @@ src/
 1. `cli.main → live_replay.replay → author.load_action`：录制转为内存动作，已有动作自动检查后直接加载。
 2. `load_replay_profile`：读取本机参数。
 3. 预览直接调用 `replay.create_plan`；执行由 `_execute` 读取当前反馈，再调用一次 `create_plan`。
-4. `create_plan` 生成接管、进入、整段播放、回位、释放序列，自动检查范围和速度/加速度。组合动作还调用 `collision.find_path / smooth_path` 规划进入与回位，并检查整段碰撞。
-5. `executor.execute_replay` 持续读取反馈、检查后发送目标；整段只接管和释放一次。
+4. `create_plan` 生成接管、进入、整段播放、回位、释放序列，自动检查范围和速度/加速度。所有回放都调用 `collision.find_path / smooth_path` 规划进入与回位，并检查整段碰撞。
+5. `executor.execute_replay` 持续读取反馈、检查后发送目标；整段只接管和释放一次。多个文件按命令参数顺序编排，不保存中间组合文件。
 
 `build` 可选，只负责把内存动作保存到文件。`transition` 调用同一个 `load_action` 读取两段动作，衔接后仍输出统一动作；`replay` 不需要另一套执行器。`trajectory` 只做计算，不处理网络或运行状态。
 
@@ -66,5 +66,7 @@ src/
 真机只写 J15–J28 和权重槽位 29，不发送手指、腿部、导航或服务切换命令。
 `publisher.Write()` 是实际发送控制命令的位置；数值检查、发送成功和流程完成不等于现场控制交接成功。
 
-`transition` 输出 `g1-arm7-action-v1`，单个动作也是这个格式。组合回放使用本次实测腿/腰姿态重新检查整段路径，并监控其变化。模型假设与检查方法见[避碰衔接](transitions.md)。
+`transition` 输出 `g1-arm7-action-v1`，单个动作也是这个格式。回放使用本次实测腿/腰姿态检查整段路径，并监控其变化。模型假设与检查方法见[避碰衔接](transitions.md)。
 测试使用合成状态与替身端口，默认测试不连接机器人。开发验证命令、旧格式兼容与独立 `audit` 已删除，必要检查在实际调用处自动执行。
+
+示教 `record_session` 的输入线程只产生回车事件；主控制循环持续发送指令。结束时冻结终点、恢复增益，再将纯几何回位规划交给工作线程；等待规划期间继续保持终点，回位稳定后才释放。

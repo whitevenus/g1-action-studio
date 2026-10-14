@@ -23,11 +23,11 @@ def main(argv=None):
     teach = commands.add_parser("teach", help="Arm7 手把手示教候选；默认只检查参数")
     teach.add_argument("interface", help="DDS 网卡，例如 eth0")
     teach.add_argument("--side", choices=("left", "right"), required=True)
-    teach.add_argument("--seconds", type=int, required=True, help="hold 的固定保持时长，或 record 的录制时长")
+    teach.add_argument("--seconds", type=int, default=3, help="hold 的保持时长；record 用回车开始和结束")
     teach.add_argument("--output", required=True)
     teach.add_argument("--profile", required=True, help="本机候选/验收参数 JSON；hold 只需保持增益")
-    teach.add_argument("--stage", choices=("hold", "soften", "record"), default="hold",
-                       help="默认只试验原位保持；record 才会录制手摆动作")
+    teach.add_argument("--stage", choices=("hold", "soften", "record"), default="record",
+                       help="默认回车控制示教录制；hold/soften 用于单独调试")
     teach.add_argument("--execute", action="store_true", help="显式开启真机控制与录制")
 
     check = commands.add_parser("preflight", help="只读保存运控与状态消息观测报告")
@@ -46,7 +46,7 @@ def main(argv=None):
 
     playback = commands.add_parser("replay", help="单个或组合动作回放；默认预览，--execute 才连接真机")
     playback.add_argument("interface", help="DDS 网卡，例如 eth0")
-    playback.add_argument("source", help="录制、单个动作或组合动作 JSON")
+    playback.add_argument("source", nargs="+", help="按播放顺序填写一个或多个录制/动作 JSON")
     playback.add_argument("--side", choices=("left", "right"), help="默认使用组合动作的回放侧；其他输入默认 left")
     playback.add_argument("--profile", required=True, help="回放候选参数 JSON")
     playback.add_argument("--model", default=str(DEFAULT_MODEL), help="本机配置对应的关节范围 XML")

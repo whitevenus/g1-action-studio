@@ -16,7 +16,7 @@ docs/       代码导航与避碰说明
 data/       个人录制和验证输出
 ```
 
-Python 3.8 及以上。基础离线工具只用标准库；避碰规划需 Python 3.10+ 和可选 MuJoCo 依赖。真机功能需要另外安装官方 `unitree_sdk2py` 和兼容的 CycloneDDS。不要把 Python 包版本兼容等同于机器人固件兼容。
+Python 3.8 及以上。文件整理只用标准库；示教录制与回放的避碰规划需要 Python 3.10+ 和 MuJoCo（`planning` 依赖）。真机功能需要另外安装官方 `unitree_sdk2py` 和兼容的 CycloneDDS。不要把 Python 包版本兼容等同于机器人固件兼容。
 
 ## 安装与运行
 
@@ -36,7 +36,7 @@ uv run g1-action-studio --help
 项目根目录已有 `data/`，用于保存个人记录，默认不进入版本控制：
 
 ```bash
-uv run g1-action-studio replay unused examples/synthetic-recording.json \
+uv run --extra planning g1-action-studio replay unused examples/transition/action-b.json \
   --side left --profile examples/profiles/replay.json \
   --output data/example-preview.json
 ```
@@ -84,18 +84,23 @@ uv run g1-action-studio preflight eth0 --seconds 10 --output data/preflight-001.
 
 保持阶段只需要 `hold_kp/hold_kd`；示教还需要 `teach_kp/teach_kd`。回放另有跟踪误差、回位稳定和状态时效参数。示教默认不按速度或起始位置偏移中止；回放的这两项是可选检查，公共示例未设置。数值和模式检查仍保留，异常时不能保证自动释放成功。
 
-### 3. 逐阶段示教
+### 3. 回车控制示教录制
 
-先不带 `--execute` 检查参数，再按 `hold → soften → record` 验证。下面是完整示教命令形式；替换为自己的参数后才在现场执行：
+机器人由你切到 `ai / 501` 并保持稳定站立，程序保存此时的双臂位置。SDK 权重从 0 渐变到 1 后，降低示教侧刚度；另一侧保持本次初始位置。
 
 ```bash
-uv run g1-action-studio teach eth0 --side left --stage record --seconds 10 \
+uv run --extra planning g1-action-studio teach eth0 --side left \
   --profile data/my-soften-profile.json --output data/recording-001.json --execute
 ```
 
-`left` 是机器人自身的左臂，面对它时在你的右手边。接管固定双臂目标；降低刚度后示教侧目标跟随实测位置。看到 `RECORDING_STARTED` 再缓慢移动，持续托住示教手臂，另一侧净空。没有显式重力补偿或松手检测。
+默认 `--stage record`，不需要填写录制秒数。先托住手臂并摆到动作起点，按回车开始；完成动作后再按回车结束。
+等待回车期间也持续发送低刚度跟随命令。`left` 是机器人自身的左臂；没有显式重力补偿，低刚度不能保证松手后不下沉。
 
-`hold` 会固定保持 `--seconds` 秒；`soften` 的降刚度渐变固定为 3 秒，随后直接恢复释放，没有低刚度停留阶段。`record` 的 `--seconds` 只计算录制时间。释放固定一次实测位置，恢复增益后交还权重，不会自动回到录制起点，也不属于录制文件内容。
+结束后冻结终点目标，渐变恢复保持刚度；规划回位期间持续保持终点，再沿避碰路径回到程序启动时的双臂位置。
+确认实测位置和速度稳定后，权重从 1 渐变到 0。准备、恢复增益、回位与释放均不写进动作录制。
+回位规划失败、反馈失效或取消时，不在终点主动释放；停止自动流程并提示现场接管。停止发布不能保证官方控制器继续保持该姿态。
+
+`--stage hold --seconds 3` 和 `--stage soften` 仍可用于单独调试。去掉 `--execute` 只核对参数，不连接设备。
 
 ### 4. 直接回放或可选整理
 
@@ -113,7 +118,7 @@ uv run g1-action-studio build data/recording-001.json \
 以下命令可选择预览，不连接设备：
 
 ```bash
-uv run g1-action-studio replay eth0 data/recording-001.json --side left \
+uv run --extra planning g1-action-studio replay eth0 data/recording-001.json --side left \
   --profile data/my-replay-profile.json --speed-scale 0.5 \
   --output data/replay-preview-001.json
 ```
@@ -121,7 +126,7 @@ uv run g1-action-studio replay eth0 data/recording-001.json --side left \
 实际回放使用 `--execute`；预览是可选的，必要检查自动执行。回放时不要手拖或强行托推手臂：
 
 ```bash
-uv run g1-action-studio replay eth0 data/recording-001.json --side left \
+uv run --extra planning g1-action-studio replay eth0 data/recording-001.json --side left \
   --profile data/my-replay-profile.json --speed-scale 0.5 \
   --output data/replay-trial-001.json --execute
 ```
@@ -130,7 +135,19 @@ uv run g1-action-studio replay eth0 data/recording-001.json --side left \
 
 组合动作已经制作好平滑衔接，回放只按比例调整时间，保留内部路径。
 
-组合动作只在整段开始接管、整段结束回位与释放，中间不重复交接。组合回放持续检查腿/腰是否偏离规划姿态，偏离超过 0.02 弧度时停止自动执行。
+### 5. 按顺序回放多个动作
+
+直接在 `replay` 后按顺序传入文件，不需要提前运行 `transition`：
+
+```bash
+uv run --extra planning g1-action-studio replay eth0 data/wave.json data/point.json data/recording-002.json \
+  --side left --profile data/my-replay-profile.json --output data/sequence-run.json --execute
+```
+
+启动时加载全部输入，读取本次双臂和腿/腰姿态，自动规划初始位置到第一个起点、各动作间衔接、最后一个终点到初始位置。
+先尝试直连，必要时搜索绕行；完整检查通过后才发布控制命令。单个动作也使用同一套进入、回位和碰撞检查。
+整段只接管、回位和释放一次，动作之间权重保持 1。播放前重新确认基线未变化，播放中持续检查腿/腰姿态，偏离规划值超过 0.02 弧度时停止自动执行。
+MuJoCo 只计算 FK 与模型几何，不保证现实环境和负载无碰撞。`transition` 保留为可选的组合文件导出工具。
 
 Ctrl+C 请求取消，状态可信时固定当前位置尝试释放。状态失效、模式改变或释放失败时停止自动收尾，现场操作员接管。报告 `completed` 仅表示执行器流程完成；实际轨迹、回位和控制交接仍需现场确认。不要根据退出码自动批量播放。
 

@@ -72,8 +72,8 @@ def build_schedule(frames, baseline, takeover=3.0, enter=5.0, return_seconds=5.0
     metrics(frames)
     baseline = finite_vector(baseline)
     durations = [_steps(value) for value in (takeover, enter, return_seconds, release)]
-    if frames[-1]["t"] > 120:
-        raise ValueError("离线动作时长不得超过 120 秒")
+    if frames[-1]["t"] > 540:
+        raise ValueError("动作序列时长不得超过 540 秒")
     output = [{"t": 0.0, "phase": "takeover", "q": list(baseline), "weight": 0.0}]
     phases = []
 
@@ -165,30 +165,43 @@ def screen_schedule(frames, limits, max_velocity, max_acceleration):
 
 def create_plan(data, baseline, model_path, max_velocity, max_acceleration,
                 takeover=3.0, enter=5.0, return_seconds=5.0, release=2.0,
-                speed_scale=None, side=None):
+                speed_scale=None, side=None, collision_check=False):
     """离线预览和现场规划共用；现场基线由只读反馈提供。"""
     q = finite_vector(baseline["q"])
     limits = load_limits(model_path)
-    motion = data["frames"] if speed_scale is None else retime_frames(
-        data["frames"], speed_scale, smooth=data["kind"] == "single")
+    actions = data if isinstance(data, list) else [data]
+    if not actions:
+        raise ValueError("至少需要一个动作")
+    if side is not None and side not in ("left", "right"):
+        raise ValueError("回放侧必须为 left 或 right")
+    if any(action["kind"] == "sequence" and side != action["side"] for action in actions):
+        raise ValueError("组合动作只能按制作时的回放侧执行")
+    motions = [action["frames"] if speed_scale is None else retime_frames(
+        action["frames"], speed_scale, smooth=action["kind"] == "single") for action in actions]
     if side is not None:
-        if side not in ("left", "right"):
-            raise ValueError("回放侧必须为 left 或 right")
-        motion = hold_other_arm(motion, q, side)
+        motions = [hold_other_arm(motion, q, side) for motion in motions]
     collision_model = None
     body_pose = None
     enter_motion = return_motion = None
-    if data["kind"] == "sequence":
-        if side != data["side"]:
-            raise ValueError("组合动作只能按制作时的回放侧执行")
-        body_pose = list(baseline.get("body_q", data["collision"]["body_q"]))
+    if collision_check or len(actions) > 1 or actions[0]["kind"] == "sequence":
+        settings = next((action["collision"] for action in actions if action["kind"] == "sequence"),
+                        {"body_q": [0.0] * 15, "clearance_m": 0.02})
+        body_pose = list(baseline.get("body_q", settings["body_q"]))
         from .collision import CollisionModel, find_path, smooth_path
         collision_model = CollisionModel(body_pose)
-        margin, seed = data["collision"]["clearance_m"], data.get("seed", 0)
+        margin, seed = settings["clearance_m"], actions[0].get("seed", 0)
+        motion = list(motions[0])
+        for following in motions[1:]:
+            path = find_path(collision_model, motion[-1]["q"], following[0]["q"], side, margin, seed)
+            bridge = smooth_path(path, max_velocity, max_acceleration)
+            for frame in bridge[1:] + following[1:]:
+                motion.append({"t": round(len(motion) * DT, 6), "q": list(frame["q"])})
         enter_path = find_path(collision_model, q, motion[0]["q"], side, margin, seed)
         return_path = find_path(collision_model, motion[-1]["q"], q, side, margin, seed)
         enter_motion = smooth_path(enter_path, max_velocity, max_acceleration)
         return_motion = smooth_path(return_path, max_velocity, max_acceleration)
+    else:
+        motion = motions[0]
     frames, phases = build_schedule(motion, q, takeover, enter, return_seconds, release,
                                     enter_motion, return_motion)
     screening = screen_schedule(frames, limits, max_velocity, max_acceleration)
@@ -197,8 +210,10 @@ def create_plan(data, baseline, model_path, max_velocity, max_acceleration,
             "qualification": "offline_only_not_executable", "hardware_enabled": False,
             "status": "offline_numerical_rejected" if screening["violations"] else "offline_numerical_pass",
             "target_profile": PROFILE, "arm_slots": list(ARM_SLOTS),
-            "action_code": data["action_code"], "action_version": data["action_version"],
-            "source_trajectory_sha256": data["trajectory_sha256"],
+            "action_code": actions[0]["action_code"], "action_version": actions[0]["action_version"],
+            "source_trajectory_sha256": actions[0]["trajectory_sha256"],
+            "actions": [{"code": action["action_code"], "trajectory_sha256": action["trajectory_sha256"]}
+                        for action in actions],
             "baseline": baseline, "model": {"file_name": Path(model_path).name,
                                            "limits_rad": [list(pair) for pair in limits]},
             "thresholds": {"max_velocity_rad_s": max_velocity, "max_acceleration_rad_s2": max_acceleration},

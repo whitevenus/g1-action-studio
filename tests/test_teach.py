@@ -114,32 +114,10 @@ class TeachLifecycleTests(unittest.TestCase):
         self.assertEqual(self.signals[signal.SIGINT], "previous")
         self.assertEqual(self.signals[signal.SIGTERM], "previous")
 
-    def test_record_follows_only_selected_side_and_freezes_both_on_release(self):
-        for side, selected, held in (("left", 0, 7), ("right", 7, 0)):
-            with self.subTest(side=side):
-                self.port.writes.clear()
-                result = self.run_teach("record", side)
-                initial = self.port.writes[0]["q"]
-                soften = self.port.writes[151:302]
-                recording = self.port.writes[302:353]
-                release = self.port.writes[353:]
-                self.assertNotEqual(recording[0]["q"][selected], recording[-1]["q"][selected])
-                self.assertTrue(all(w["q"][held] == initial[held] for w in soften + recording))
-                self.assertEqual(len({w["q"] for w in release}), 1)
-                self.assertEqual(release[0]["kp"], TEST_PROFILE["teach_kp"])
-                self.assertEqual(release[50]["kp"], TEST_PROFILE["hold_kp"])
-                self.assertEqual(release[50]["weight"], 1)
-                self.assertEqual(release[-1]["weight"], 0)
-                self.assertEqual(result["samples"], 51)
-                payload = json.loads(self.output.getvalue())
-                self.assertEqual(payload["qualification"], "raw_observation_not_executable")
-                self.output.seek(0)
-                self.output.truncate()
-
     def test_failed_first_positive_send_still_attempts_release(self):
         self.port.fail_write = 2
         with self.assertRaisesRegex(RuntimeError, "模拟发送失败"):
-            self.run_teach("record")
+            self.run_teach("hold")
         self.assertEqual(len(self.port.writes), 103)
         self.assertEqual(self.port.writes[2]["weight"], self.port.writes[1]["weight"])
         self.assertEqual(self.port.writes[-1]["weight"], 0)
@@ -155,7 +133,7 @@ class TeachLifecycleTests(unittest.TestCase):
                 self.port.writes.clear()
                 self.port.invalid = invalid
                 with self.assertRaisesRegex(RuntimeError, "示教失败：.*释放失败"):
-                    self.run_teach("record")
+                    self.run_teach("hold")
                 self.assertEqual(len(self.port.writes), 2)
                 self.assertTrue(self.port.closed)
                 self.writer.assert_not_called()
@@ -176,7 +154,7 @@ class TeachLifecycleTests(unittest.TestCase):
                 self.signals[signal.SIGINT](signal.SIGINT, None)
         self.clock.on_sleep = stop
         with self.assertRaisesRegex(RuntimeError, "操作员已请求停止"):
-            self.run_teach("record")
+            self.run_teach("hold")
         self.assertEqual(self.port.writes[-1]["weight"], 0)
         self.assertTrue(self.port.closed)
         self.writer.assert_not_called()
@@ -212,7 +190,7 @@ class TeachLifecycleTests(unittest.TestCase):
         self.port.fail_write = 2
         self.port.close_error = True
         with self.assertRaisesRegex(RuntimeError, "模拟发送失败.*模拟关闭失败"):
-            self.run_teach("record")
+            self.run_teach("hold")
         self.writer.assert_not_called()
 
     def test_preflight_failure_creates_no_publisher_or_commands(self):

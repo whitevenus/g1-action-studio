@@ -1,11 +1,13 @@
-"""Arm7 手把手示教候选：显式接管、低刚度记录、原位释放。"""
+"""Arm7 示教：回车录制、保持终点、恢复刚度、避碰回位后释放。"""
 
 import math
 import signal
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Event, Lock
+from threading import Event, Lock, Thread
+from queue import Queue, Empty
+from concurrent.futures import ThreadPoolExecutor
 
 from .constants import (
     ARM_COMMAND_TOPIC, ARM_SLOTS, DT, EXPECTED_MODE, JOINT_NAMES, LEFT, LOWSTATE_TOPIC, PROFILE,
@@ -108,6 +110,7 @@ class SdkArmPort:
 
     def write(self, positions, hold_kp, hold_kd, teach_kp, teach_kd, side, weight):
         command = self.command_type()
+        command.mode_pr, command.mode_machine = EXPECTED_MODE
         selected = LEFT if side == "left" else RIGHT
         for offset, index in enumerate(ARM_SLOTS):
             motor = command.motor_cmd[index]
@@ -128,7 +131,7 @@ class SdkArmPort:
             raise RuntimeError("关闭通信失败：" + "；".join(errors))
 
 
-def teach(interface, side, seconds, output, profile_path, execute=False, target_stage="hold"):
+def teach(interface, side, seconds, output, profile_path, execute=False, target_stage="record"):
     """只在显式执行时创建 DDS 发布者；输出为未验收的状态录制。"""
     if side not in ("left", "right") or not 1 <= seconds <= 30:
         raise ValueError("只支持 left/right 单臂示教，时长为 1–30 秒")
@@ -142,6 +145,8 @@ def teach(interface, side, seconds, output, profile_path, execute=False, target_
         return {"execute": False, "side": side, "seconds": seconds,
                 "profile": profile, "output": str(output), "stage": target_stage,
                 "message": "只核对参数；没有连接机器人或发送命令"}
+    if target_stage == "record":
+        return record_session(interface, side, output, profile)
 
     port = None
     stop = Event()
@@ -151,7 +156,6 @@ def teach(interface, side, seconds, output, profile_path, execute=False, target_
     last_weight = 0.0
     last_kp = profile["hold_kp"]
     last_kd = profile["hold_kd"]
-    samples = []
     stage = "初始化"
     release_sent = True
     primary_error = None
@@ -193,7 +197,7 @@ def teach(interface, side, seconds, output, profile_path, execute=False, target_
 
     # 按时间渐变一个阶段
     def phase(duration, weight_start, weight_end,
-              kp_start, kp_end, kd_start, kd_end, capture=False, follow_measured=False):
+              kp_start, kp_end, kd_start, kd_end, follow_measured=False):
         steps = max(1, round(duration / DT))
         began = time.monotonic()
         for step in range(steps + 1):
@@ -203,11 +207,6 @@ def teach(interface, side, seconds, output, profile_path, execute=False, target_
                             kd_start + (kd_end - kd_start) * ratio,
                             weight_start + (weight_end - weight_start) * ratio,
                             follow_measured)
-            if capture:
-                samples.append({"t": round(time.monotonic() - capture_start, 6),
-                                "mode_pr": snapshot["mode_pr"],
-                                "mode_machine": snapshot["mode_machine"],
-                                "q": list(snapshot["q"]), "dq": list(snapshot["dq"])})
             # 安排下一次循环（尽量维持指定hz）
             delay = began + (step + 1) * DT - time.monotonic()
             if step < steps and delay > 0:
@@ -249,19 +248,12 @@ def teach(interface, side, seconds, output, profile_path, execute=False, target_
             phase(seconds, 1.0, 1.0,
                   profile["hold_kp"], profile["hold_kp"],
                   profile["hold_kd"], profile["hold_kd"])
-        if target_stage in ("soften", "record"):
+        if target_stage == "soften":
             # 操作员应已托住手臂；从此阶段才让示教侧目标跟随测量位置。
             stage = "降低示教刚度"
             phase(3.0, 1.0, 1.0,
                   profile["hold_kp"], profile["teach_kp"],
                   profile["hold_kd"], profile["teach_kd"], follow_measured=True)
-        if target_stage == "record":
-            stage = "录制"
-            capture_start = time.monotonic()
-            print("RECORDING_STARTED：托住示教手臂缓慢移动；请保持另一侧净空。", flush=True)
-            phase(seconds, 1.0, 1.0,
-                  profile["teach_kp"], profile["teach_kp"],
-                  profile["teach_kd"], profile["teach_kd"], capture=True, follow_measured=True)
         stage = "结束"
     except BaseException as error:
         primary_error = error
@@ -314,25 +306,203 @@ def teach(interface, side, seconds, output, profile_path, execute=False, target_
         raise RuntimeError("释放命令未完整发送；未保存可用记录")
     if stage != "结束":
         raise RuntimeError("示教未完整结束，未保存可用记录")
-    if target_stage != "record":
-        return {"stage": target_stage, "qualification": "unqualified_hardware_trial",
-                "recording_written": False,
-                "trial_metrics": trial_metrics,
-                "message": "已发送释放命令；实际交接仍须现场确认"}
-    if len(samples) < 2:
-        raise RuntimeError("录制样本不足，未保存可用记录")
-    payload = {
-        "schema": RECORDING_SCHEMA,
-        "qualification": "raw_observation_not_executable",
-        "target_profile": PROFILE,
-        "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
-        "interface": interface, "requested_seconds": seconds,
-        "arm_slots": list(ARM_SLOTS), "joint_names": list(JOINT_NAMES),
-        "teaching_side": side, "teaching_profile": profile,
-        "trial_metrics": trial_metrics,
-        "messages_received": len(samples), "invalid_messages": 0,
-        "samples": samples,
-    }
-    write_json(payload, output, allow_nan=True)
-    return {"path": str(output), "samples": len(samples),
-            "qualification": payload["qualification"]}
+    return {"stage": target_stage, "qualification": "unqualified_hardware_trial",
+            "recording_written": False, "trial_metrics": trial_metrics,
+            "message": "已发送释放命令；实际交接仍须现场确认"}
+
+
+def read_record_keys(events, stop):
+    """键盘线程只产生事件，不读取反馈或发送控制指令。"""
+    try:
+        for prompt in ("摆好起点后按回车开始录制：", "完成动作后按回车结束录制："):
+            if stop.is_set():
+                return
+            input(prompt)
+            events.put("enter")
+    except (EOFError, OSError) as error:
+        events.put(error)
+
+
+def plan_return(start, end, side, body_q):
+    from .collision import CollisionModel, find_path, smooth_path
+    model = CollisionModel(body_q)
+    motion = smooth_path(find_path(model, start, end, side), 0.5, 2.0)
+    model.check_motion(motion, 0.02)
+    return motion
+
+
+def record_session(interface, side, output, profile):
+    """回车录制；终点保持、恢复刚度、避碰回位、稳定后才释放。"""
+    from .trajectory import interpolate_positions, smoothstep
+    from .constants import DEFAULT_MODEL
+    from .replay import load_limits
+    limits = load_limits(DEFAULT_MODEL)
+    stop, events = Event(), Queue()
+    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
+    port = None
+    baseline = modes = target = planned_body = None
+    selected = range(7) if side == "left" else range(7, 14)
+    samples = []
+    last_tick = None
+    weight = 0.0
+    stage = "准备"
+    pool = None
+
+    def tick(kp, kd, w, follow=False, capture=False):
+        nonlocal target, weight, last_tick
+        if stop.is_set():
+            raise RuntimeError("操作员已请求停止")
+        now = time.monotonic()
+        if last_tick is not None and now - last_tick > 0.1:
+            raise RuntimeError("示教控制周期超时")
+        state = port.snapshot()
+        validate_snapshot(state, modes)
+        if any(not low <= q <= high for q, (low, high) in zip(state["q"], limits)):
+            raise RuntimeError("反馈角度超出关节范围")
+        if planned_body is not None:
+            body = state.get("body_q")
+            if (body is None or len(body) != 15 or any(not math.isfinite(v) for v in body)
+                    or max(abs(a - b) for a, b in zip(body, planned_body)) > 0.02):
+                raise RuntimeError("腿/腰姿态偏离回位规划")
+        if follow:
+            target = list(baseline)
+            for i in selected:
+                target[i] = state["q"][i]
+        if max(abs(a - b) for a, b in zip(state["q"], target)) > 0.15:
+            raise RuntimeError("示教保持或回位跟踪误差超限")
+        weight, last_tick = w, now
+        port.write(target, profile["hold_kp"], profile["hold_kd"], kp, kd, side, w)
+        if capture:
+            samples.append({"t": round(now - capture_start, 6), "q": list(state["q"]),
+                            "dq": list(state["dq"]), "mode_pr": state["mode_pr"],
+                            "mode_machine": state["mode_machine"]})
+        return state
+
+    def ramp(seconds, w0, w1, kp0, kp1, kd0, kd1, follow=False):
+        began = time.monotonic()
+        steps = round(seconds / DT)
+        for i in range(steps + 1):
+            blend = smoothstep(i / steps)
+            tick(kp0 + (kp1-kp0)*blend, kd0 + (kd1-kd0)*blend,
+                 w0 + (w1-w0)*blend, follow=follow)
+            if i < steps:
+                time.sleep(max(0, began + (i+1)*DT - time.monotonic()))
+
+    try:
+        port = SdkArmPort(interface)
+        if not port.ready.wait(5):
+            raise RuntimeError("等待初始状态超时")
+        port.check_services()
+        state = port.snapshot()
+        modes = state["motor_modes"] if state else ()
+        validate_snapshot(state, modes)
+        if modes != (1,) * 14:
+            raise RuntimeError("手臂电机模式不符合条件")
+        time.sleep(3)
+        if port.observed_commands():
+            raise RuntimeError("观测到其他手臂命令；不接管")
+        port.check_services()
+        state = port.snapshot()
+        validate_snapshot(state, modes)
+        baseline = tuple(state["q"])
+        target = list(baseline)
+        if max(map(abs, state["dq"])) > 0.1:
+            raise RuntimeError("初始手臂尚未静止")
+        # 初始姿态须在模型范围内且无本体碰撞，才能开始接管。
+        if state.get("body_q") is None:
+            raise RuntimeError("避碰示教需要腿/腰姿态反馈")
+        plan_return(baseline, baseline, side, state["body_q"])
+        for sig in previous:
+            signal.signal(sig, lambda *_: stop.set())
+        port.start_publisher()
+        ramp(3, 0, 1, profile["hold_kp"], profile["hold_kp"], profile["hold_kd"], profile["hold_kd"])
+        ramp(3, 1, 1, profile["hold_kp"], profile["teach_kp"], profile["hold_kd"], profile["teach_kd"], True)
+        Thread(target=read_record_keys, args=(events, stop), daemon=True).start()
+        recording = False
+        stage = "等待开始"
+        while True:
+            try:
+                event = events.get_nowait()
+            except Empty:
+                event = None
+            if isinstance(event, Exception):
+                raise RuntimeError("录制输入已关闭") from event
+            if event == "enter":
+                if recording:
+                    tick(profile["teach_kp"], profile["teach_kd"], 1, True, True)
+                    break
+                recording = True
+                capture_start = time.monotonic()
+                stage = "录制"
+                print("RECORDING_STARTED", flush=True)
+            tick(profile["teach_kp"], profile["teach_kd"], 1, True, recording)
+            time.sleep(DT)
+        # 最后一帧已冻结 target；恢复增益时不再追随手动移动。
+        stage = "恢复刚度"
+        ramp(1, 1, 1, profile["teach_kp"], profile["hold_kp"], profile["teach_kd"], profile["hold_kd"])
+        state = port.snapshot()
+        planned_body = state.get("body_q")
+        if planned_body is None:
+            raise RuntimeError("避碰回位需要腿/腰姿态反馈")
+        stage = "规划回位"
+        pool = ThreadPoolExecutor(max_workers=1)
+        future = pool.submit(plan_return, list(target), baseline, side, list(planned_body))
+        while not future.done():
+            tick(profile["hold_kp"], profile["hold_kd"], 1)
+            time.sleep(DT)
+        motion = future.result()
+        stage = "回位"
+        began = time.monotonic()
+        while True:
+            elapsed = min(motion[-1]["t"], time.monotonic() - began)
+            # 返回路径只含 q/t，直接使用公共位置插值。
+            index = min(int(elapsed / DT), len(motion)-1)
+            after = min(index+1, len(motion)-1)
+            target = interpolate_positions(motion[index]["q"], motion[after]["q"],
+                                           min(1, max(0, elapsed/DT-index)))
+            tick(profile["hold_kp"], profile["hold_kd"], 1)
+            if elapsed >= motion[-1]["t"]:
+                break
+            time.sleep(DT)
+        target = list(baseline)
+        stage = "等待回位稳定"
+        began, stable = time.monotonic(), None
+        while True:
+            state = tick(profile["hold_kp"], profile["hold_kd"], 1)
+            now = time.monotonic()
+            if (max(abs(a-b) for a,b in zip(state["q"], baseline)) <= 0.05
+                    and max(map(abs, state["dq"])) <= 0.1):
+                stable = now if stable is None else stable
+                if now-stable >= 0.1:
+                    break
+            else:
+                stable = None
+            if now-began > 5:
+                raise RuntimeError("实际回位等待超时")
+            time.sleep(DT)
+        stage = "释放"
+        ramp(2, 1, 0, profile["hold_kp"], profile["hold_kp"], profile["hold_kd"], profile["hold_kd"])
+    except BaseException as error:
+        if weight > 0:
+            raise RuntimeError("示教在{}阶段停止：{}；未自动释放，请现场接管".format(stage, error)) from error
+        raise
+    finally:
+        stop.set()
+        if pool is not None:
+            pool.shutdown(wait=False)
+        try:
+            if port is not None:
+                port.close()
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
+    if len(samples) < 3:
+        raise RuntimeError("录制至少需要三帧；已回位释放，未保存录制")
+    payload = {"schema": RECORDING_SCHEMA, "qualification": "raw_observation_not_executable",
+               "target_profile": PROFILE, "arm_slots": list(ARM_SLOTS), "joint_names": list(JOINT_NAMES),
+               "recorded_at_utc": datetime.now(timezone.utc).isoformat(), "teaching_side": side,
+               "teaching_profile": profile, "baseline_q": list(baseline),
+               "messages_received": len(samples), "invalid_messages": 0, "samples": samples}
+    write_json(payload, output)
+    return {"path": str(output), "samples": len(samples), "release_sent": True,
+            "duration_s": samples[-1]["t"], "qualification": payload["qualification"]}

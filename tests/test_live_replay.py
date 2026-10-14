@@ -18,15 +18,23 @@ from fake_sdk import SimulatedSDK, VirtualClock
 
 class LiveReplayTests(unittest.TestCase):
     def setUp(self):
+        try:
+            from g1_action_studio.collision import CollisionModel
+            CollisionModel()
+        except ImportError as error:
+            self.skipTest(str(error))
         self.folder = tempfile.TemporaryDirectory(dir=Path(__file__).parent)
         self.addCleanup(self.folder.cleanup)
         self.root = Path(self.folder.name)
         self.source = self.root / "recording.json"
         self.profile_path = self.root / "profile.json"
         self.output = self.root / "report.json"
+        self.safe = json.loads((Path(__file__).parents[1] / "examples/transition/action-b.json").read_text())["samples"][0]["q"]
+        self.initial = list(self.safe)
+        self.initial[0] += 0.02
         samples = []
         for i in range(51):
-            q = [0.2] * 7 + [0.3 + 0.001 * i] * 7
+            q = list(self.safe)
             q[3] += 0.002 * i
             samples.append({"t": i * 0.02, "q": q, "dq": [0.1] * 14,
                             "mode_pr": 0, "mode_machine": 5})
@@ -56,7 +64,7 @@ class LiveReplayTests(unittest.TestCase):
 
     def test_execute_uses_fresh_baseline_holds_other_arm_and_returns_before_release(self):
         clock = VirtualClock()
-        sdk = SimulatedSDK(clock, [0.4] * 14)
+        sdk = SimulatedSDK(clock, self.initial)
         with patch("g1_action_studio.live_replay._make_sdk", return_value=sdk), \
                 patch("g1_action_studio.teach.time", clock), \
                 patch("g1_action_studio.live_replay.time", clock):
@@ -65,8 +73,8 @@ class LiveReplayTests(unittest.TestCase):
         self.assertTrue(result["release_sent"])
         self.assertFalse(result["handover_confirmed"])
         report = json.loads(self.output.read_text(encoding="utf-8"))
-        self.assertEqual(report["plan"]["baseline"]["q"], [0.4] * 14)
-        self.assertTrue(all(f["q"][7:] == [0.4] * 7 for f in report["plan"]["frames"]))
+        self.assertEqual(report["plan"]["baseline"]["q"], self.initial)
+        self.assertTrue(all(f["q"][7:] == self.initial[7:] for f in report["plan"]["frames"]))
         self.assertTrue(all(r.closed for r in sdk.resources))
         self.assertEqual(sdk.writes[-1].motor_cmd[29].q, 0)
         phases = [s["phase"] for s in report["samples"]]
@@ -128,7 +136,7 @@ class LiveReplayTests(unittest.TestCase):
 
     def test_cancel_through_signal_runs_recovery_and_restores_handlers(self):
         clock = VirtualClock()
-        sdk = SimulatedSDK(clock, [0.4] * 14)
+        sdk = SimulatedSDK(clock, self.initial)
         handlers = {}
         def cancel():
             if clock.now > 7:
