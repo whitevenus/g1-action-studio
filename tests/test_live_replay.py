@@ -92,9 +92,9 @@ class LiveReplayTests(unittest.TestCase):
         report = json.loads(self.output.read_text(encoding="utf-8"))
         samples = json.loads(original)["samples"]
         self.assertEqual(report["plan"]["baseline"]["q"], samples[0]["q"])
-        from g1_action_studio.author import build_draft
+        from g1_action_studio.author import load_action
         self.source.write_bytes(original)
-        draft = build_draft(self.source, None, None, "trial.left_replay", 1, "单臂示教回放试验")
+        draft = load_action(self.source, None, None, "trial.left_replay", 1, "单臂示教回放试验")
         self.assertEqual(draft["source"]["sha256"], hashlib.sha256(original).hexdigest())
         self.assertEqual(report["plan"]["source_trajectory_sha256"], draft["trajectory_sha256"])
 

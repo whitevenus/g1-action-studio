@@ -1,7 +1,6 @@
-# 离线避碰过渡
+# 动作衔接与组合回放
 
-只新增两个功能模块：`collision.py` 检查几何，`transition.py` 规划并拼接轨迹。
-不新增真机发布者、后台服务或机器人控制框架。
+`collision.py` 负责几何检查、绕行搜索和平滑；`transition.py` 连接两段动作。衔接输出可直接交给现有 `replay` 执行。
 
 ## 使用
 
@@ -15,14 +14,27 @@ g1-action-studio transition examples/transition/action-a.json examples/transitio
   --output data/transition-preview.json
 ```
 
-输入可用原始录制或 `build` 生成的草稿。程序对两段动作重采样，使动作边界缓慢停住；
-默认平均速度为原动作的 0.5。另一侧手臂统一保持动作 A 首帧姿态，忽略原记录中另一侧的漂移。
+输入可用 `record` / `teach` 原始录制，或 `build` / `transition` 生成的统一动作。程序对两段动作重采样，使动作边界缓慢停住；
+默认 `--speed-scale 1` 保留各动作时长。另一侧手臂统一保持动作 A 首帧姿态，忽略原记录中另一侧的漂移。
 如需核对真实站姿，`--body-pose data/body-pose.json` 接受 J0–J14 的 15 个弧度值数组。
 该姿态在完整规划期间保持不变。未提供时明确使用参考零位，不推测现场姿态。
 
 结果包含完整的 `action_1 → transition → action_2` 帧序列、过渡路点、速度/加速度指标、
-模型来源与哈希、最小间隙及规划参数。成功为 `offline_collision_pass`，并明确标记
-`hardware_enabled=false`。不覆盖现有文件。失败不输出可用计划。
+模型哈希、最小间隙及规划参数。输出为 `g1-arm7-action-v1`，`kind=sequence`；单个动作是同一格式的 `kind=single`。
+成功为 `offline_collision_pass`，表示制作时的模型检查通过。制作过程不连接 DDS，不覆盖现有文件；失败不输出动作。
+
+总时长为 A + 衔接 + B。例如 10 秒与 6 秒动作，衔接耗时 2 秒，则输出 18 秒；端点相同则为 16 秒。
+组合输入还可与下一个动作继续衔接。合成示例标记会保留到输出，禁止真机执行。
+
+```bash
+uv run --extra planning g1-action-studio replay eth0 data/my-combined.json \
+  --profile data/my-replay-profile.json --output data/combined-run.json --execute
+```
+
+无需独立审核命令，也不强制先运行预览。执行自动读取当前双臂及 J0–J14 姿态，固定另一侧手臂，
+重新规划当前姿态到动作起点、动作终点到当前姿态的路径，并检查整个目标序列。
+一次接管后播放完整组合，最后一次回位、释放。未指定 `--side` 时自动使用组合文件的回放侧；不允许切换到另一侧。
+执行中腿/腰相对规划姿态偏离超过 0.02 弧度时停止，反馈不可信时不盲目发送恢复动作。
 
 ## 规划流程
 
@@ -54,7 +66,7 @@ g1-action-studio transition examples/transition/action-a.json examples/transitio
   环境碰撞、动力学、平衡和真实跟踪误差不在此结果范围内。
 
 公开模型尚未按具体实机外形和安装尺寸验收。离线通过仅针对上述模型和固定姿态，
-不能宣称真机绝不会碰撞。现有 `replay --execute` 尚未接入本规划器，也不接受此输出格式。
+不能宣称真机绝不会碰撞。组合动作虽已接入真实回放流程，实际跟踪、负载、机体稳定和控制交接仍需在本机确认。
 
 ## 验证案例
 

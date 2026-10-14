@@ -33,7 +33,7 @@ def preflight(interface, seconds, output):
     if output.exists():
         raise FileExistsError("输出文件已存在，请换一个报告文件名")
 
-    # 离线制作草稿不依赖机器人 SDK，因此在这里才导入 SDK。
+    # 动作制作不依赖机器人 SDK，因此在这里才导入 SDK。
     from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber
     from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_
 

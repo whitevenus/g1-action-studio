@@ -13,14 +13,14 @@ src/
   preflight.py       只读预检
   record.py          只读状态录制
   teach.py           接管、保持、降低刚度、录制、释放
-  author.py          录制校验、裁剪、重采样和草稿组装
+  author.py          加载录制或统一动作，自动裁剪/重采样
   replay.py          回放规划、时间插值和数值检查
   live_replay.py     离线预览或显式真机回放
   executor.py        反馈检查、回位等待、取消和异常释放
   replay_sdk.py      回放执行器的 DDS 读写接口
   unitree_binding.py 官方 SDK 绑定、服务查询、反馈快照与通道清理
-  collision.py       固定机体姿态下的碰撞检查
-  transition.py      两段动作之间的避碰过渡
+  collision.py       碰撞检查、绕行搜索和路径平滑
+  transition.py      衔接动作，保存可回放的统一动作
   resources/         关节范围、碰撞模型和网格资源
 ```
 
@@ -32,7 +32,7 @@ src/
 - 离线过渡：`cli → transition → collision`，只加载可选的 MuJoCo。
 - 回归测试：`tests/fake_sdk → executor / replay_sdk`，用内存消息与虚拟时钟检查正常和故障流程。
 
-`author` 读取录制并整理草稿；回放预览用录制首帧作为基线，真机执行重新读取当前反馈作为基线。
+`author.load_action` 读取录制或统一动作；录制在内存中重采样，已有动作直接加载。回放预览用录制首帧作为基线，真机执行重新读取当前反馈作为基线。
 选中侧保留录制路径，另一侧保持本次起始姿态。`replay.sample_schedule` 同时供离线检查和执行器插值使用。
 
 ## 公共实现怎样复用
@@ -45,8 +45,15 @@ src/
 - `config.read_json / write_json` 统一文件读写。回放仍在创建通信之前独占报告路径，再调用 `dump_json` 写入已打开的文件。
 - `unitree_binding` 的公共函数由预检、示教和回放共同使用；这些函数只有在实际调用时才导入或创建 SDK 通信。
 
-例如回放入口的主流程现在是：`build_draft → load_replay_profile → _plan → 预览或 _execute`。
-规划仍由 `replay.create_plan` 完成；`trajectory` 只做计算，不处理网络或运行状态。
+实际调用顺序：
+
+1. `cli.main → live_replay.replay → author.load_action`：录制转为内存动作，已有动作自动检查后直接加载。
+2. `load_replay_profile`：读取本机参数。
+3. 预览直接调用 `replay.create_plan`；执行由 `_execute` 读取当前反馈，再调用一次 `create_plan`。
+4. `create_plan` 生成接管、进入、整段播放、回位、释放序列，自动检查范围和速度/加速度。组合动作还调用 `collision.find_path / smooth_path` 规划进入与回位，并检查整段碰撞。
+5. `executor.execute_replay` 持续读取反馈、检查后发送目标；整段只接管和释放一次。
+
+`build` 可选，只负责把内存动作保存到文件。`transition` 调用同一个 `load_action` 读取两段动作，衔接后仍输出统一动作；`replay` 不需要另一套执行器。`trajectory` 只做计算，不处理网络或运行状态。
 
 示教与回放的命令语义不同：示教侧会跟随实测位置并使用单侧增益；回放按规划目标跟踪双臂。
 两者分别保留通信实现，避免把模式字段、增益和释放行为藏进通用框架。
@@ -59,5 +66,5 @@ src/
 真机只写 J15–J28 和权重槽位 29，不发送手指、腿部、导航或服务切换命令。
 `publisher.Write()` 是实际发送控制命令的位置；数值检查、发送成功和流程完成不等于现场控制交接成功。
 
-`transition` 的输出仅用于离线验证，真机回放不接受此格式。模型假设与检查方法见[离线避碰过渡](transitions.md)。
-测试使用合成状态与替身端口，默认测试不连接机器人。开发验证命令与离线 SDK 报文审计已删除。
+`transition` 输出 `g1-arm7-action-v1`，单个动作也是这个格式。组合回放使用本次实测腿/腰姿态重新检查整段路径，并监控其变化。模型假设与检查方法见[避碰衔接](transitions.md)。
+测试使用合成状态与替身端口，默认测试不连接机器人。开发验证命令、旧格式兼容与独立 `audit` 已删除，必要检查在实际调用处自动执行。

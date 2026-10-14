@@ -24,7 +24,7 @@ LOWSTATE_TOPIC = "rt/lowstate"
 ARM_COMMAND_TOPIC = "rt/arm_sdk"
 
 RECORDING_SCHEMA = "g1-arm7-state-recording-v1"
-DRAFT_SCHEMA = "g1-arm7-action-draft-v1"
+ACTION_SCHEMA = "g1-arm7-action-v1"
 PLAN_SCHEMA = "g1-arm7-offline-replay-plan-v1"
 PROFILE_SCHEMA = "g1-arm7-teach-profile-v1"
 RESOURCES = Path(__file__).resolve().parent / "resources"

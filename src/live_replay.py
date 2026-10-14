@@ -1,12 +1,12 @@
-"""单次单臂回放入口；只有 execute=True 才加载 SDK 并初始化 DDS。"""
+"""录制、单个和组合动作的回放入口；execute=True 才初始化 DDS。"""
 
 import signal
 import time
 from pathlib import Path
 from threading import Event
 
-from .constants import ARM_SLOTS, EXPECTED_MODE, EXPECTED_MOTOR_MODES, PROFILE
-from .author import build_draft
+from .constants import ARM_SLOTS, EXPECTED_MOTOR_MODES, PROFILE
+from .author import load_action
 from .executor import execute_replay
 from .config import dump_json, load_replay_profile
 from .replay import create_plan
@@ -22,14 +22,15 @@ def _make_sdk(interface):
     return sdk
 
 
-def _baseline(q, provenance):
+def _baseline(q, provenance, body_q=None):
     return {"schema": "g1-arm7-replay-baseline-v1", "target_profile": PROFILE,
-            "arm_slots": list(ARM_SLOTS), "q": list(q), "provenance": provenance}
+            "arm_slots": list(ARM_SLOTS), "q": list(q), "provenance": provenance,
+            **({"body_q": list(body_q)} if body_q is not None else {})}
 
 
-def _plan(draft, baseline, profile, model, speed_scale, side, error_prefix="离线轨迹"):
+def _plan(action, baseline, profile, model, speed_scale, side, error_prefix="离线轨迹"):
     plan = create_plan(
-        draft, baseline, model,
+        action, baseline, model,
         profile["max_target_velocity_rad_s"], profile["max_target_acceleration_rad_s2"],
         speed_scale=speed_scale, side=side,
     )
@@ -38,7 +39,7 @@ def _plan(draft, baseline, profile, model, speed_scale, side, error_prefix="离�
     return plan
 
 
-def _execute(interface, draft, profile, model, speed_scale, side, stop):
+def _execute(interface, action, profile, model, speed_scale, side, stop):
     port = ReplaySdkPort(_make_sdk(interface), time)
     try:
         if not port.wait_ready(5.0, stop):
@@ -46,8 +47,10 @@ def _execute(interface, draft, profile, model, speed_scale, side, stop):
         state = port.snapshot()
         validate_snapshot(state, EXPECTED_MOTOR_MODES)
         # 接管和最终回位均使用本次反馈，另一侧全程保持此位置。
-        baseline = _baseline(state["q"], "本次执行前 rt/lowstate 实测姿态")
-        plan = _plan(draft, baseline, profile, model, speed_scale, side,
+        if action["kind"] == "sequence" and state.get("body_q") is None:
+            raise RuntimeError("组合动作需要腿/腰的当前姿态反馈")
+        baseline = _baseline(state["q"], "本次执行前 rt/lowstate 实测姿态", state.get("body_q"))
+        plan = _plan(action, baseline, profile, model, speed_scale, side,
                      error_prefix="当前姿态生成的回放计划")
         print("现场规划完成：{} 臂单次回放，目标序列 {:.2f} 秒；先执行接管前预检。".format(
             side, plan["metrics"]["duration_s"]), flush=True)
@@ -63,17 +66,21 @@ def _execute(interface, draft, profile, model, speed_scale, side, stop):
         raise
 
 
-def replay(interface, source, profile_path, model, output, side="left",
+def replay(interface, source, profile_path, model, output, side=None,
            speed_scale=0.5, execute=False):
     source = Path(source)
-    draft = build_draft(source, None, None, "trial." + side + "_replay", 1,
-                        "单臂示教回放试验", allow_synthetic=not execute)
-    if (draft["observed_mode_pr"], draft["observed_mode_machine"]) != EXPECTED_MODE:
-        raise ValueError("录制模式不符合 0/5")
+    action = load_action(source)
+    if execute and action["synthetic"]:
+        raise ValueError("合成示例只供离线学习，不允许真机执行")
+    side = side or action.get("side", "left")
+    if side not in ("left", "right"):
+        raise ValueError("回放侧必须为 left 或 right")
+    if action["kind"] == "sequence" and side != action["side"]:
+        raise ValueError("组合动作只能按制作时的回放侧执行")
     profile = load_replay_profile(profile_path)
-    # 先做离线筛查，拒绝不可用的轨迹，再允许导入真机 SDK。
-    baseline = _baseline(draft["frames"][0]["q"], "录制首帧，仅供离线预览")
-    plan = _plan(draft, baseline, profile, model, speed_scale, side)
+    # 预览用首帧；执行只根据当前反馈规划一次，在发布命令前自动检查。
+    baseline = _baseline(action["frames"][0]["q"], "录制首帧，仅供离线预览")
+    plan = None if execute else _plan(action, baseline, profile, model, speed_scale, side)
     stop = Event()
     # 提前独占新报告路径，避免发送指令后才发现输出文件不能创建。
     with Path(output).open("x", encoding="utf-8") as stream:
@@ -82,7 +89,7 @@ def replay(interface, source, profile_path, model, output, side="left",
             try:
                 for signum in previous:
                     signal.signal(signum, lambda _signum, _frame: stop.set())
-                report = _execute(interface, draft, profile, model, speed_scale, side, stop)
+                report = _execute(interface, action, profile, model, speed_scale, side, stop)
             except (Exception, KeyboardInterrupt) as error:
                 report = {"status": "failed", "qualification": "unqualified_executor_trial",
                           "errors": [{"message": str(error) or type(error).__name__}],

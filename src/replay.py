@@ -6,7 +6,6 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 
 from .constants import ARM_SLOTS, DEFAULT_MODEL, DT, JOINT_NAMES, PLAN_SCHEMA, PROFILE
-from .author import validate_draft
 from .trajectory import (finite_vector, frame_digest, hold_other_arm, interpolate_positions,
                          joint_motion, metrics, smoothstep)
 
@@ -43,8 +42,8 @@ def _steps(seconds):
     return steps
 
 
-def retime_frames(frames, speed_scale):
-    """沿原路径重采样；五次时间映射让动作两端速度、加速度趋于零。"""
+def retime_frames(frames, speed_scale, smooth=True):
+    """沿原路径调整时间；单个动作平滑两端，组合动作保留已有衔接。"""
     metrics(frames)
     if (type(speed_scale) not in (int, float) or not math.isfinite(speed_scale)
             or not 0 < speed_scale <= 1):
@@ -56,7 +55,7 @@ def retime_frames(frames, speed_scale):
     output = []
     for step in range(steps + 1):
         u = step / steps
-        source_t = duration * smoothstep(u)
+        source_t = duration * (smoothstep(u) if smooth else u)
         position = source_t / DT
         left = min(int(position), len(frames) - 2)
         ratio = min(1.0, max(0.0, position - left))
@@ -67,7 +66,8 @@ def retime_frames(frames, speed_scale):
     return output
 
 
-def build_schedule(frames, baseline, takeover=3.0, enter=5.0, return_seconds=5.0, release=2.0):
+def build_schedule(frames, baseline, takeover=3.0, enter=5.0, return_seconds=5.0, release=2.0,
+                   enter_motion=None, return_motion=None):
     """完整正常路径；返回显式基线。weight 仅是离线分析值。"""
     metrics(frames)
     baseline = finite_vector(baseline)
@@ -88,14 +88,29 @@ def build_schedule(frames, baseline, takeover=3.0, enter=5.0, return_seconds=5.0
                            "weight": weight_start + (weight_end - weight_start) * blend})
         phases.append({"phase": name, "start_s": began, "end_s": output[-1]["t"]})
 
+    def add_motion(name, motion, minimum_steps):
+        began = output[-1]["t"]
+        positions = [frame["q"] for frame in motion[1:]]
+        positions += [motion[-1]["q"]] * max(0, minimum_steps - len(positions))
+        for q in positions:
+            output.append({"t": round(len(output) * DT, 6), "phase": name,
+                           "q": list(q), "weight": 1.0})
+        phases.append({"phase": name, "start_s": began, "end_s": output[-1]["t"]})
+
     transition("takeover", baseline, baseline, durations[0], 0.0, 1.0)
-    transition("enter", baseline, frames[0]["q"], durations[1])
+    if enter_motion is None:
+        transition("enter", baseline, frames[0]["q"], durations[1])
+    else:
+        add_motion("enter", enter_motion, durations[1])
     began = output[-1]["t"]
     for frame in frames[1:]:
         output.append({"t": round(len(output) * DT, 6), "phase": "replay",
                        "q": list(frame["q"]), "weight": 1.0})
     phases.append({"phase": "replay", "start_s": began, "end_s": output[-1]["t"]})
-    transition("return", frames[-1]["q"], baseline, durations[2])
+    if return_motion is None:
+        transition("return", frames[-1]["q"], baseline, durations[2])
+    else:
+        add_motion("return", return_motion, durations[2])
     transition("release", baseline, baseline, durations[3], 1.0, 0.0)
     return output, phases
 
@@ -152,17 +167,32 @@ def create_plan(data, baseline, model_path, max_velocity, max_acceleration,
                 takeover=3.0, enter=5.0, return_seconds=5.0, release=2.0,
                 speed_scale=None, side=None):
     """离线预览和现场规划共用；现场基线由只读反馈提供。"""
-    validate_draft(data)
     q = finite_vector(baseline["q"])
     limits = load_limits(model_path)
-    motion = data["frames"] if speed_scale is None else retime_frames(data["frames"], speed_scale)
+    motion = data["frames"] if speed_scale is None else retime_frames(
+        data["frames"], speed_scale, smooth=data["kind"] == "single")
     if side is not None:
         if side not in ("left", "right"):
             raise ValueError("回放侧必须为 left 或 right")
         motion = hold_other_arm(motion, q, side)
-    frames, phases = build_schedule(motion, q, takeover, enter,
-                                   return_seconds, release)
+    collision_model = None
+    body_pose = None
+    enter_motion = return_motion = None
+    if data["kind"] == "sequence":
+        if side != data["side"]:
+            raise ValueError("组合动作只能按制作时的回放侧执行")
+        body_pose = list(baseline.get("body_q", data["collision"]["body_q"]))
+        from .collision import CollisionModel, find_path, smooth_path
+        collision_model = CollisionModel(body_pose)
+        margin, seed = data["collision"]["clearance_m"], data.get("seed", 0)
+        enter_path = find_path(collision_model, q, motion[0]["q"], side, margin, seed)
+        return_path = find_path(collision_model, motion[-1]["q"], q, side, margin, seed)
+        enter_motion = smooth_path(enter_path, max_velocity, max_acceleration)
+        return_motion = smooth_path(return_path, max_velocity, max_acceleration)
+    frames, phases = build_schedule(motion, q, takeover, enter, return_seconds, release,
+                                    enter_motion, return_motion)
     screening = screen_schedule(frames, limits, max_velocity, max_acceleration)
+    collision = None if collision_model is None else collision_model.check_motion(frames, margin)
     return {"schema": PLAN_SCHEMA,
             "qualification": "offline_only_not_executable", "hardware_enabled": False,
             "status": "offline_numerical_rejected" if screening["violations"] else "offline_numerical_pass",
@@ -173,4 +203,5 @@ def create_plan(data, baseline, model_path, max_velocity, max_acceleration,
                                            "limits_rad": [list(pair) for pair in limits]},
             "thresholds": {"max_velocity_rad_s": max_velocity, "max_acceleration_rad_s2": max_acceleration},
             "phases": phases, "frames": frames, "schedule_sha256": frame_digest(frames),
+            "body_pose": body_pose, "collision": collision,
             **screening}

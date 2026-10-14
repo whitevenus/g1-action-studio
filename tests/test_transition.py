@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from g1_action_studio.collision import CollisionModel
-from g1_action_studio.transition import find_path, plan_transition, smooth_path
-from g1_action_studio.author import metrics
+from g1_action_studio.collision import CollisionModel, find_path, smooth_path
+from g1_action_studio.transition import plan_transition
+from g1_action_studio.trajectory import metrics
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -91,19 +91,19 @@ class TransitionTests(unittest.TestCase):
                 self.assertFalse(mount)
         self.assertIn(('left_hand_thumb_sweep','right_hand_thumb_sweep'),cross_arm)
 
-    def test_complete_plan_checks_actions_and_cannot_be_replayed(self):
+    def test_complete_transition_outputs_uniform_loadable_action(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as directory:
             output=Path(directory)/'plan.json'
             with patch.dict('sys.modules',{'unitree_sdk2py':None}):
                 result=plan_transition(EXAMPLES/'action-a.json',EXAMPLES/'action-b.json',output,seed=5)
-            self.assertFalse(result['hardware_enabled'])
+            self.assertEqual(result['kind'], 'sequence')
             self.assertEqual(result['status'],'offline_collision_pass')
             self.assertGreaterEqual(result['minimum_clearance_m'],.02)
-            plan=json.loads(output.read_text())
+            plan=json.loads(output.read_text(encoding='utf-8'))
             self.assertEqual({f['phase'] for f in plan['frames']},{'action_1','transition','action_2'})
             self.assertEqual(plan['frames'][0]['q'][7:],plan['frames'][-1]['q'][7:])
-            from g1_action_studio.author import load_source
-            with self.assertRaisesRegex(ValueError,'格式'):load_source(output)
+            from g1_action_studio.author import load_action
+            self.assertEqual(load_action(output), plan)
             with self.assertRaises(FileExistsError):
                 plan_transition(EXAMPLES/'action-a.json',EXAMPLES/'action-b.json',output)
 

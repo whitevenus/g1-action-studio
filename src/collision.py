@@ -1,9 +1,10 @@
 """固定腿/腰姿态下的双臂碰撞检查；只计算几何，不运行 DDS 或动力学。"""
 
 import math
+import random
 
-from .constants import ARM_JOINT_COUNT, COLLISION_MODEL, JOINT_NAMES
-from .trajectory import finite_vector
+from .constants import ARM_JOINT_COUNT, ARM_OFFSETS, ARM_SLOTS, COLLISION_MODEL, DT, JOINT_NAMES
+from .trajectory import finite_vector, interpolate_positions, smoothstep
 
 
 class CollisionModel:
@@ -74,6 +75,19 @@ class CollisionModel:
             raise ValueError('双臂姿态超出碰撞模型关节范围')
         return q
 
+    def check_motion(self, frames, margin):
+        """检查完整轨迹和帧间运动；制作与实际回放规划共用。"""
+        clearance, mount_gap = 0.5, 0.5
+        for index, frame in enumerate(frames):
+            check = self.clearance(frame["q"], margin)
+            if not check["valid"]:
+                raise ValueError("完整动作在 {:.2f}s 碰撞或余量不足：{}".format(frame["t"], check))
+            clearance = min(clearance, check["distance_m"])
+            mount_gap = min(mount_gap, check["mount_gap_m"])
+            if index and not self.edge_clear(frames[index - 1]["q"], frame["q"], margin):
+                raise ValueError("完整动作在 {:.2f}s 帧间无法证明无碰撞".format(frame["t"]))
+        return {"minimum_clearance_m": clearance, "minimum_mount_gap_m": mount_gap}
+
     def _position(self, q):
         self.data.qpos[self.addresses] = q
         self.mj.mj_kinematics(self.model, self.data)
@@ -120,3 +134,93 @@ class CollisionModel:
                 return False
             pending.extend(((a, midpoint, depth + 1), (midpoint, b, depth + 1)))
         return True
+
+
+def find_path(model, start, end, side, margin=0.02, seed=0, iterations=1200):
+    """先尝试直连，否则用两棵小型 RRT 树寻找绕行；失败就拒绝。"""
+    start, end = model.validate(start), model.validate(end)
+    if side not in ('left', 'right') or not 0.001 <= margin <= 0.10:
+        raise ValueError('side 须为 left/right；避碰余量须为 0.001–0.10 米')
+    selected = ARM_OFFSETS[side]
+    fixed = set(range(len(ARM_SLOTS))) - set(selected)
+    if any(start[i] != end[i] for i in fixed):
+        raise ValueError('过渡时另一侧手臂必须保持同一姿态')
+    for label, q in [('开始', start), ('结束', end)]:
+        check = model.clearance(q, margin)
+        if not check['valid']:
+            raise ValueError('{}姿态碰撞或余量不足：{}'.format(label, check))
+    if model.edge_clear(start, end, margin):
+        return [start, end]
+    rng = random.Random(seed)
+    trees = [([start], [-1]), ([end], [-1])]
+
+    def extend(tree, target):
+        points, parents = tree
+        nearest = min(range(len(points)), key=lambda n: sum((points[n][i] - target[i])**2 for i in selected))
+        distance = math.sqrt(sum((points[nearest][i] - target[i])**2 for i in selected))
+        ratio = min(1.0, 0.30 / max(distance, 1e-12))
+        q = interpolate_positions(points[nearest], target, ratio)
+        if not model.edge_clear(points[nearest], q, margin):
+            return None
+        points.append(q)
+        parents.append(nearest)
+        return len(points)-1
+
+    def branch(tree, index):
+        path = []
+        while index >= 0:
+            path.append(tree[0][index])
+            index = tree[1][index]
+        return list(reversed(path))
+
+    for attempt in range(iterations):
+        active = attempt % 2
+        target = list(start)
+        for i in selected:
+            target[i] = rng.uniform(float(model.limits[i,0]), float(model.limits[i,1]))
+        first = extend(trees[active], target)
+        if first is None:
+            continue
+        meeting = trees[active][0][first]
+        # 限制另一棵树的连接次数，避免内层循环无限搜索。
+        for _ in range(40):
+            second = extend(trees[1-active], meeting)
+            if second is None:
+                break
+            if max(abs(a-b) for a,b in zip(trees[1-active][0][second], meeting)) < 1e-9:
+                a, b = branch(trees[active], first), branch(trees[1-active], second)
+                path = a + list(reversed(b))[1:]
+                if active == 1:
+                    path.reverse()
+                # 尝试删去多余路点，每条新连接都重新检查碰撞。
+                result, index = [path[0]], 0
+                while index < len(path)-1:
+                    following = len(path)-1
+                    while following > index+1 and not model.edge_clear(path[index], path[following], margin):
+                        following -= 1
+                    result.append(path[following])
+                    index = following
+                return result
+    raise ValueError('离线规划预算内未找到避碰路径；不生成可播放结果')
+
+
+def smooth_path(path, max_velocity=0.5, max_acceleration=2.0):
+    """沿已检查的关节线段做五次时间插值；每个拐点速度和加速度为零。"""
+    if any(not math.isfinite(v) or v <= 0 for v in (max_velocity, max_acceleration)):
+        raise ValueError('速度、加速度上限必须为正有限数')
+    frames = [{'t': 0.0, 'q': list(path[0]), 'phase': 'transition'}]
+    if all(a == b for a, b in zip(path[0], path[-1])) and len(path) == 2:
+        return frames
+    for a, b in zip(path, path[1:]):
+        distance = max(abs(y-x) for x,y in zip(a,b))
+        # 按五次曲线 10u³ − 15u⁴ + 6u⁵ 的导数最大值计算时长。
+        seconds = max(2*DT, 1.875*distance/max_velocity,
+                      math.sqrt((10/math.sqrt(3))*distance/max_acceleration))
+        steps = math.ceil(seconds/DT)
+        for step in range(1, steps+1):
+            u = step/steps
+            blend = smoothstep(u)
+            frames.append({'t': round(len(frames)*DT, 6), 'q': interpolate_positions(a, b, blend),
+                           'phase': 'transition'})
+    frames[-1]["q"] = list(path[-1])
+    return frames

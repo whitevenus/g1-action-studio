@@ -100,6 +100,13 @@ def execute_replay(plan, profile, port_factory, clock, stop):
                 raise RuntimeError("关节状态无效")
         if any(q < low or q > high for q, (low, high) in zip(state["q"], limits)):
             raise RuntimeError("反馈角度超出模型范围")
+        if plan.get("body_pose") is not None:
+            body = state.get("body_q")
+            if (not isinstance(body, (tuple, list)) or len(body) != ARM_SLOTS[0]
+                    or any(type(v) not in (int, float) or not math.isfinite(v) for v in body)):
+                raise RuntimeError("组合动作缺少有效的腿/腰姿态反馈")
+            if max(abs(a - b) for a, b in zip(body, plan["body_pose"])) > 0.02:
+                raise RuntimeError("腿/腰姿态已偏离本次碰撞规划；停止组合动作")
         if "max_speed_rad_s" in profile and max(map(abs, state["dq"])) > profile["max_speed_rad_s"]:
             raise RuntimeError("反馈速度超限")
         if "max_offset_rad" in profile and max(abs(q - initial) for q, initial in zip(state["q"], baseline)) > profile["max_offset_rad"]:

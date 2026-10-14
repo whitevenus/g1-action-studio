@@ -1,6 +1,6 @@
 # G1 Action Studio
 
-用于宇树 G1 Arm7 的独立动作制作工具：预检、状态录制、手把手示教、轨迹整理和单次回放。
+用于宇树 G1 Arm7 的独立动作制作工具：预检、状态录制、手把手示教、动作整理、避碰衔接和回放。
 
 [项目架构图](docs/architecture.html) · [代码导航](docs/architecture.md) · [离线避碰过渡](docs/transitions.md) · [开发说明](CONTRIBUTING.md)
 
@@ -55,7 +55,16 @@ uv run --extra planning g1-action-studio transition examples/transition/action-a
 
 它输出“动作 A → 绕行过渡 → 动作 B”，检查完整轨迹及帧间运动。示例的直接连接会穿过机体，但规划器会绕开。过渡拐点平滑停住再出发，暂不做不停顿混合。默认腿和腰固定在模型参考零位；可通过 `--body-pose` 提供 J0–J14 的固定姿态。
 
-此结果仅供离线验证，现有 `replay --execute` 不接受它，也尚未使用这个碰撞检查。不能把离线规划成功当成真机可直接执行。
+衔接结果与单个动作使用同一种 `g1-arm7-action-v1` 格式，可以直接交给 `replay`：
+
+```bash
+uv run --extra planning g1-action-studio replay unused data/transition-preview.json \
+  --profile examples/profiles/replay.json --output data/combined-preview.json
+```
+
+这里的示例是合成数据，只能预览。自己的组合动作可用同一个命令加 `--execute` 执行；程序自动读取当前姿态，规划进入与回位路径，并检查整段运动。组合回放也需要 `planning` 依赖。
+
+`transition` 默认保留各动作时长，加上衔接时间；端点相同则不增加衔接时间。它调整动作两端速度，使边界平稳停住。
 
 ## 真机操作顺序
 
@@ -88,9 +97,20 @@ uv run g1-action-studio teach eth0 --side left --stage record --seconds 10 \
 
 `hold` 会固定保持 `--seconds` 秒；`soften` 的降刚度渐变固定为 3 秒，随后直接恢复释放，没有低刚度停留阶段。`record` 的 `--seconds` 只计算录制时间。释放固定一次实测位置，恢复增益后交还权重，不会自动回到录制起点，也不属于录制文件内容。
 
-### 4. 单次回放
+### 4. 直接回放或可选整理
 
-先运行离线预览：
+`record` 和 `teach --stage record` 保存相同的 `g1-arm7-state-recording-v1` 录制格式。录制文件可直接回放，无需先 `build`。
+
+只在需要裁剪、命名或保存可复用动作时使用 `build`：
+
+```bash
+uv run g1-action-studio build data/recording-001.json \
+  --start 1 --end 8 --name 招手 --code greeting.wave --output data/wave.json
+```
+
+单个动作和衔接动作均保存为 `g1-arm7-action-v1`，核心内容都是 `frames=[{t,q}]`。`replay` 自动识别录制与动作，已有动作直接读取，不重新制作。不再提供旧格式兼容和独立 `audit`。
+
+以下命令可选择预览，不连接设备：
 
 ```bash
 uv run g1-action-studio replay eth0 data/recording-001.json --side left \
@@ -98,7 +118,7 @@ uv run g1-action-studio replay eth0 data/recording-001.json --side left \
   --output data/replay-preview-001.json
 ```
 
-确认后换新的输出路径并加 `--execute`。回放时不要手拖或强行托推手臂：
+实际回放使用 `--execute`；预览是可选的，必要检查自动执行。回放时不要手拖或强行托推手臂：
 
 ```bash
 uv run g1-action-studio replay eth0 data/recording-001.json --side left \
@@ -107,6 +127,10 @@ uv run g1-action-studio replay eth0 data/recording-001.json --side left \
 ```
 
 程序重新读取本次双臂姿态，接管、平滑进入录制起点、播放、平滑回位、等待实际稳定、释放。另一侧全程保持本次起始位置。`0.5` 将动作扩展为约两倍时长，并在两端渐变速度，不是恒定半速。内置 XML 只包含关节范围；如有本机核准的范围文件可用 `--model` 替换。
+
+组合动作已经制作好平滑衔接，回放只按比例调整时间，保留内部路径。
+
+组合动作只在整段开始接管、整段结束回位与释放，中间不重复交接。组合回放持续检查腿/腰是否偏离规划姿态，偏离超过 0.02 弧度时停止自动执行。
 
 Ctrl+C 请求取消，状态可信时固定当前位置尝试释放。状态失效、模式改变或释放失败时停止自动收尾，现场操作员接管。报告 `completed` 仅表示执行器流程完成；实际轨迹、回位和控制交接仍需现场确认。不要根据退出码自动批量播放。
 

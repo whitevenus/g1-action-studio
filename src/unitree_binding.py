@@ -49,11 +49,16 @@ def create_service_clients():
 
 def arm_snapshot(message, clock):
     motors = [message.motor_state[i] for i in ARM_SLOTS]
-    return {"at": clock.monotonic(), "mode_pr": int(message.mode_pr),
+    state = {"at": clock.monotonic(), "mode_pr": int(message.mode_pr),
             "mode_machine": int(message.mode_machine),
             "motor_modes": tuple(int(m.mode) for m in motors),
             "q": tuple(float(m.q) for m in motors),
             "dq": tuple(float(m.dq) for m in motors)}
+    try:
+        state["body_q"] = tuple(float(message.motor_state[i].q) for i in range(ARM_SLOTS[0]))
+    except (AttributeError, IndexError, TypeError, ValueError):
+        state["body_q"] = None
+    return state
 
 
 def close_channels(port):

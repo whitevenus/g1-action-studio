@@ -47,6 +47,7 @@ class SimulatedSDK:
             raise ValueError("模拟响应时间须为正的有限数")
         self.clock, self.response_s = clock, response_s
         self.q, self.dq = list(baseline), [0.0] * len(ARM_SLOTS)
+        self.body_q = [0.0] * ARM_SLOTS[0]
         self.target = list(baseline)
         self.weight = 0.0
         self.subscribers, self.resources, self.writes = [], [], []
@@ -123,6 +124,8 @@ class SimulatedSDK:
             return
         message = SimpleNamespace(mode_pr=self.mode_pr, mode_machine=self.mode_machine,
                                   motor_state=[SimpleNamespace(mode=1, q=0.0, dq=0.0) for _ in range(35)])
+        for i, q in enumerate(self.body_q):
+            message.motor_state[i].q = q
         for offset, slot in enumerate(ARM_SLOTS):
             message.motor_state[slot] = SimpleNamespace(mode=self.motor_modes[offset],
                                                        q=self.q[offset], dq=self.dq[offset])

@@ -8,7 +8,7 @@ from unittest.mock import patch
 from g1_action_studio import ARM_SLOTS, PROFILE
 from g1_action_studio.trajectory import frame_digest
 from g1_action_studio.config import read_json, write_json
-from g1_action_studio.author import validate_draft
+from g1_action_studio.author import load_action, validate_action
 from g1_action_studio.replay import (
     DEFAULT_MODEL, build_schedule, load_limits, create_plan,
     sample_schedule, screen_schedule,
@@ -24,24 +24,24 @@ def fixture(folder):
         q = [0.0] * 14
         q[3] = 0.2 + index * 0.002
         frames.append({"t": round(index * 0.02, 6), "q": q})
-    draft = {"schema": "g1-arm7-action-draft-v1", "qualification": "draft_unqualified_not_executable",
-             "hardware_enabled": False, "target_profile": PROFILE, "arm_slots": list(ARM_SLOTS),
-             "action_code": "classroom.test", "action_version": 1,
+    action = {"schema": "g1-arm7-action-v1", "kind": "single", "synthetic": False,
+             "target_profile": PROFILE, "arm_slots": list(ARM_SLOTS),
+             "action_code": "classroom.test", "action_version": 1, "display_name": "测试动作",
              "frames": frames, "trajectory_sha256": frame_digest(frames)}
     baseline = {"schema": "g1-arm7-replay-baseline-v1", "target_profile": PROFILE,
                 "arm_slots": list(ARM_SLOTS), "provenance": "合成测试姿态，不用于真机", "q": [0.0] * 14}
-    draft_path, baseline_path = Path(folder) / "draft.json", Path(folder) / "baseline.json"
-    write_json(draft, draft_path)
+    action_path, baseline_path = Path(folder) / "action.json", Path(folder) / "baseline.json"
+    write_json(action, action_path)
     write_json(baseline, baseline_path)
-    return draft_path, baseline_path, frames
+    return action_path, baseline_path, frames
 
 
 class ReplayTests(unittest.TestCase):
     def test_complete_schedule_returns_to_explicit_baseline_and_releases(self):
         with tempfile.TemporaryDirectory(dir=TEST_ROOT) as folder:
-            draft, baseline, source = fixture(folder)
+            action, baseline, source = fixture(folder)
             with patch.dict(sys.modules, {"unitree_sdk2py": None}):
-                result = create_plan(read_json(draft), read_json(baseline), DEFAULT_MODEL, 1.0, 20.0)
+                result = create_plan(read_json(action), read_json(baseline), DEFAULT_MODEL, 1.0, 20.0)
             self.assertEqual(result["status"], "offline_numerical_pass")
             self.assertFalse(result["hardware_enabled"])
             frames = result["frames"]
@@ -91,17 +91,17 @@ class ReplayTests(unittest.TestCase):
 
     def test_rejects_tampered_source(self):
         with tempfile.TemporaryDirectory(dir=TEST_ROOT) as folder:
-            draft, baseline, _ = fixture(folder)
-            data = json.loads(draft.read_text(encoding="utf-8"))
+            action, baseline, _ = fixture(folder)
+            data = json.loads(action.read_text(encoding="utf-8"))
             data["frames"][0]["q"][0] = 1
-            draft.write_text(json.dumps(data), encoding="utf-8")
+            action.write_text(json.dumps(data), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "摘要"):
-                create_plan(read_json(draft), read_json(baseline), DEFAULT_MODEL, 1, 20)
+                create_plan(load_action(action), read_json(baseline), DEFAULT_MODEL, 1, 20)
 
-    def test_rejects_malformed_draft_without_a_traceback(self):
+    def test_rejects_malformed_action_without_a_traceback(self):
         for data in ([], None, {"frames": None}):
             with self.assertRaises(ValueError):
-                validate_draft(data)
+                validate_action(data)
 
 
     def test_invalid_durations_and_thresholds(self):
@@ -126,9 +126,9 @@ class ReplayTests(unittest.TestCase):
 
     def test_rejected_plan_can_be_saved_without_overwriting(self):
         with tempfile.TemporaryDirectory(dir=TEST_ROOT) as folder:
-            draft, baseline, _ = fixture(folder)
+            action, baseline, _ = fixture(folder)
             output = Path(folder) / "plan.json"
-            data = create_plan(read_json(draft), read_json(baseline), DEFAULT_MODEL, 0.001, 0.001)
+            data = create_plan(read_json(action), read_json(baseline), DEFAULT_MODEL, 0.001, 0.001)
             self.assertEqual(data["status"], "offline_numerical_rejected")
             self.assertTrue(data["violations"])
             write_json(data, output)

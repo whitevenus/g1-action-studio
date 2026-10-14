@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from g1_action_studio import ARM_SLOTS, PROFILE
-from g1_action_studio.author import audit_draft, build_draft
+from g1_action_studio.author import load_action
 from g1_action_studio.config import write_json
 
 
@@ -28,47 +28,47 @@ def source_file(path, *, gap=False, changed_mode=False):
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-class DraftTests(unittest.TestCase):
-    def test_build_is_unqualified_and_auditable(self):
+class ActionTests(unittest.TestCase):
+    def test_build_produces_loadable_uniform_action(self):
         with tempfile.TemporaryDirectory(dir=TEST_ROOT) as folder:
             source = Path(folder) / "source.json"
-            output = Path(folder) / "draft.json"
+            output = Path(folder) / "action.json"
             source_file(source)
-            draft = build_draft(source, 0.0, 1.0, "classroom.emphasis", 1, "重点")
-            self.assertEqual(draft["qualification"], "draft_unqualified_not_executable")
-            self.assertFalse(draft["hardware_enabled"])
-            self.assertEqual(draft["metrics"]["frame_count"], 51)
-            self.assertAlmostEqual(draft["metrics"]["start_end_max_error_rad"], 0)
-            self.assertGreater(draft["metrics"]["max_excursion_from_start_rad"], 0)
-            write_json(draft, output)
-            self.assertEqual(audit_draft(output), draft["metrics"])
+            action = load_action(source, 0.0, 1.0, "classroom.emphasis", 1, "重点")
+            self.assertEqual(action["kind"], "single")
+            self.assertFalse(action["synthetic"])
+            self.assertEqual(action["metrics"]["frame_count"], 51)
+            self.assertAlmostEqual(action["metrics"]["start_end_max_error_rad"], 0)
+            self.assertGreater(action["metrics"]["max_excursion_from_start_rad"], 0)
+            write_json(action, output)
+            self.assertEqual(load_action(output), action)
             with self.assertRaises(FileExistsError):
-                write_json(draft, output)
+                write_json(action, output)
 
     def test_rejects_missing_state_span(self):
         with tempfile.TemporaryDirectory(dir=TEST_ROOT) as folder:
             source = Path(folder) / "source.json"
             source_file(source, gap=True)
             with self.assertRaisesRegex(ValueError, "状态缺口"):
-                build_draft(source, 0.0, 1.0, "classroom.emphasis", 1, "重点")
+                load_action(source, 0.0, 1.0, "classroom.emphasis", 1, "重点")
 
     def test_rejects_mode_change(self):
         with tempfile.TemporaryDirectory(dir=TEST_ROOT) as folder:
             source = Path(folder) / "source.json"
             source_file(source, changed_mode=True)
             with self.assertRaisesRegex(ValueError, "模式发生变化"):
-                build_draft(source, 0.0, 1.0, "classroom.emphasis", 1, "重点")
+                load_action(source, 0.0, 1.0, "classroom.emphasis", 1, "重点")
 
     def test_rejects_modified_trajectory(self):
         with tempfile.TemporaryDirectory(dir=TEST_ROOT) as folder:
             source = Path(folder) / "source.json"
-            output = Path(folder) / "draft.json"
+            output = Path(folder) / "action.json"
             source_file(source)
-            draft = build_draft(source, 0.0, 1.0, "classroom.emphasis", 1, "重点")
-            draft["frames"][25]["q"][10] += 0.2
-            output.write_text(json.dumps(draft), encoding="utf-8")
+            action = load_action(source, 0.0, 1.0, "classroom.emphasis", 1, "重点")
+            action["frames"][25]["q"][10] += 0.2
+            output.write_text(json.dumps(action), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "轨迹摘要不匹配"):
-                audit_draft(output)
+                load_action(output)
 
 
 if __name__ == "__main__":
