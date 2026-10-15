@@ -1,17 +1,19 @@
 """G1 动作预检、示教、制作和回放的命令行入口。"""
 
 import argparse
-import json
 import sys
 
-from .constants import COLLISION_MODEL
-from .author import load_action
-from .config import read_json, write_json
 from . import __version__
+from .author import load_action
+from .config import dump_json, read_json, write_json
+from .constants import COLLISION_MODEL
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="g1-action-studio", description="G1 Arm7 + Dex3-1 动作制作工具；teach/replay --execute 会发送手臂和手指命令")
+    parser = argparse.ArgumentParser(
+        prog="g1-action-studio",
+        description="G1 Arm7 + Dex3-1 动作制作工具；teach/replay --execute 会发送手臂和手指命令",
+    )
     parser.add_argument("--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -42,7 +44,9 @@ def main(argv=None):
     playback.add_argument("--side", choices=("left", "right"), help="默认使用组合动作的回放侧；其他输入默认 left")
     playback.add_argument("--profile", required=True, help="回放候选参数 JSON")
     playback.add_argument("--model", default=str(COLLISION_MODEL), help="本机配置对应的关节范围 XML")
-    playback.add_argument("--speed-scale", type=float, default=0.5, help="平均播放速度比例，默认 0.5：约两倍时长；单个动作平滑两端")
+    playback.add_argument(
+        "--speed-scale", type=float, default=0.5, help="平均播放速度比例，默认 0.5：约两倍时长；单个动作平滑两端"
+    )
     playback.add_argument("--output", required=True, help="新报告文件；包含本次规划和执行反馈")
     playback.add_argument("--execute", action="store_true", help="显式启用单次真机回放")
 
@@ -61,31 +65,54 @@ def main(argv=None):
     try:
         if args.command == "teach":
             from .teach import teach
+
             summary = teach(args.interface, args.side, args.output, args.profile, args.execute)
         elif args.command == "preflight":
             from .preflight import preflight
+
             summary = preflight(args.interface, args.seconds, args.output)
         elif args.command == "build":
-            action = load_action(args.source, args.start, args.end,
-                                args.code, args.version, args.name)
+            action = load_action(args.source, args.start, args.end, args.code, args.version, args.name)
             write_json(action, args.output)
-            summary = {"path": args.output, "kind": action["kind"],
-                       "trajectory_sha256": action["trajectory_sha256"],
-                       "metrics": action["metrics"]}
+            summary = {
+                "path": args.output,
+                "kind": action["kind"],
+                "trajectory_sha256": action["trajectory_sha256"],
+                "metrics": action["metrics"],
+            }
         elif args.command == "replay":
             from .live_replay import replay
-            summary = replay(args.interface, args.source, args.profile, args.model,
-                             args.output, args.side, args.speed_scale, args.execute)
+
+            summary = replay(
+                args.interface,
+                args.source,
+                args.profile,
+                args.model,
+                args.output,
+                args.side,
+                args.speed_scale,
+                args.execute,
+            )
         elif args.command == "transition":
             from .transition import plan_transition
+
             body_q = None if args.body_pose is None else read_json(args.body_pose)
-            summary = plan_transition(args.before, args.after, args.output, args.side, args.speed_scale,
-                                      args.clearance, args.max_velocity, args.max_acceleration, body_q)
+            summary = plan_transition(
+                args.before,
+                args.after,
+                args.output,
+                args.side,
+                args.speed_scale,
+                args.clearance,
+                args.max_velocity,
+                args.max_acceleration,
+                body_q,
+            )
             summary["path"] = args.output
     except (OSError, ValueError, RuntimeError, ImportError, KeyError, TypeError) as error:
         print("失败：{}".format(error), file=sys.stderr)
         return 1
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    dump_json(summary, sys.stdout, allow_nan=True)
     if args.command == "preflight" and summary["errors"]:
         return 1
     if args.command == "replay" and summary["status"] not in ("preview", "completed"):

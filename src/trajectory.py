@@ -4,7 +4,7 @@ import hashlib
 import json
 import math
 
-from .constants import JOINT_COUNT, SIDE_OFFSETS, DT
+from .constants import DT, JOINT_COUNT, SIDE_OFFSETS
 
 
 def finite_vector(values):
@@ -17,8 +17,7 @@ def finite_vector(values):
 
 
 def frame_digest(frames):
-    canonical = json.dumps(frames, sort_keys=True, separators=(",", ":"),
-                           allow_nan=False).encode("utf-8")
+    canonical = json.dumps(frames, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
 
 
@@ -28,14 +27,16 @@ def interpolate_positions(start, end, ratio):
 
 def smoothstep(ratio):
     """五次平滑曲线：两端速度和加速度为零。"""
-    return ratio ** 3 * (10 + ratio * (-15 + 6 * ratio))
+    return ratio**3 * (10 + ratio * (-15 + 6 * ratio))
 
 
 def hold_other_side(frames, baseline, side):
     """只保留选中侧的动作，另一侧统一使用基线位置。"""
     selected = SIDE_OFFSETS[side]
-    return [{"t": frame["t"], "q": [value if i in selected else baseline[i]
-             for i, value in enumerate(frame["q"])]} for frame in frames]
+    return [
+        {"t": frame["t"], "q": [value if i in selected else baseline[i] for i, value in enumerate(frame["q"])]}
+        for frame in frames
+    ]
 
 
 def derivatives(values):
@@ -53,8 +54,11 @@ def joint_motion(frames):
         raise ValueError("每帧必须是包含 t 和 q 的对象")
     points = [finite_vector(frame["q"]) for frame in frames]
     times = [float(frame["t"]) for frame in frames]
-    if (not all(math.isfinite(t) for t in times) or abs(times[0]) > 1e-8
-            or any(abs((b - a) - DT) > 1e-5 for a, b in zip(times, times[1:]))):
+    if (
+        not all(math.isfinite(t) for t in times)
+        or abs(times[0]) > 1e-8
+        or any(abs((b - a) - DT) > 1e-5 for a, b in zip(times, times[1:]))
+    ):
         raise ValueError("轨迹必须从 0 开始，以 50 Hz 等间隔采样")
     return [(values, *derivatives(values)) for values in zip(*points)]
 

@@ -3,11 +3,22 @@
 import math
 from threading import Lock
 
-from .constants import (ARM_COMMAND_TOPIC, ARM_SLOTS, DT, LOWSTATE_TOPIC, WEIGHT_SLOT,
-                        HAND_MOTOR_IDS, HAND_STATE_TOPICS, HAND_COMMAND_TOPICS,
-                        EXPECTED_MODE, EXPECTED_MOTOR_MODES, JOINT_COUNT, STATE_TIMEOUT)
-from .unitree_binding import arm_snapshot, close_channels
+from .constants import (
+    ARM_COMMAND_TOPIC,
+    ARM_SLOTS,
+    DT,
+    EXPECTED_MODE,
+    EXPECTED_MOTOR_MODES,
+    HAND_COMMAND_TOPICS,
+    HAND_MOTOR_IDS,
+    HAND_STATE_TOPICS,
+    JOINT_COUNT,
+    LOWSTATE_TOPIC,
+    STATE_TIMEOUT,
+    WEIGHT_SLOT,
+)
 from .trajectory import finite_vector
+from .unitree_binding import arm_snapshot, close_channels
 
 
 def validate_snapshot(snapshot, now, timeout=STATE_TIMEOUT) -> dict:
@@ -15,8 +26,7 @@ def validate_snapshot(snapshot, now, timeout=STATE_TIMEOUT) -> dict:
     if not isinstance(snapshot, dict):
         raise RuntimeError("手臂或手指反馈状态缺失")
     at = snapshot.get("at")
-    if (type(at) not in (int, float) or not math.isfinite(at)
-            or not 0 <= now - at <= timeout):
+    if type(at) not in (int, float) or not math.isfinite(at) or not 0 <= now - at <= timeout:
         raise RuntimeError("手臂或手指状态超时或时间戳无效")
     if (snapshot.get("mode_pr"), snapshot.get("mode_machine")) != EXPECTED_MODE:
         raise RuntimeError("机器人模式已改变")
@@ -24,8 +34,11 @@ def validate_snapshot(snapshot, now, timeout=STATE_TIMEOUT) -> dict:
         raise RuntimeError("手臂电机模式已改变")
     for key in ("q", "dq"):
         values = snapshot.get(key)
-        if (not isinstance(values, (tuple, list)) or len(values) != JOINT_COUNT
-                or any(type(v) not in (int, float) or not math.isfinite(v) for v in values)):
+        if (
+            not isinstance(values, (tuple, list))
+            or len(values) != JOINT_COUNT
+            or any(type(v) not in (int, float) or not math.isfinite(v) for v in values)
+        ):
             raise RuntimeError("手臂或手指关节状态无效")
     return snapshot
 
@@ -42,9 +55,9 @@ class ReplaySdkPort:
         self.hand_publishers = {}
         self.hand_profile: dict | None = None
         try:
-            self.subscriber = sdk.ChannelSubscriber(LOWSTATE_TOPIC, getattr(sdk, "LowStateType", sdk.LowState))
+            self.subscriber = sdk.ChannelSubscriber(LOWSTATE_TOPIC, sdk.LowStateType)
             self.subscriber.Init(self._on_state, 10)
-            self.arm_subscriber = sdk.ChannelSubscriber(ARM_COMMAND_TOPIC, getattr(sdk, "LowCmdType", sdk.LowCmd))
+            self.arm_subscriber = sdk.ChannelSubscriber(ARM_COMMAND_TOPIC, sdk.LowCmdType)
             self.arm_subscriber.Init(self._on_command, 10)
             for side in HAND_MOTOR_IDS:
                 subscriber = sdk.ChannelSubscriber(HAND_STATE_TOPICS[side], sdk.HandStateType)
@@ -93,9 +106,12 @@ class ReplaySdkPort:
             if self.latest is None or left is None or right is None:
                 return None
             # 使用最旧的接收时间，手部断流不能被新鲜的手臂反馈掩盖。
-            return {**self.latest, "at": min(self.latest["at"], left["at"], right["at"]),
-                    "q": self.latest["q"] + left["q"] + right["q"],
-                    "dq": self.latest["dq"] + left["dq"] + right["dq"]}
+            return {
+                **self.latest,
+                "at": min(self.latest["at"], left["at"], right["at"]),
+                "q": self.latest["q"] + left["q"] + right["q"],
+                "dq": self.latest["dq"] + left["dq"] + right["dq"],
+            }
 
     def observed_commands(self):
         with self.lock:
@@ -112,14 +128,13 @@ class ReplaySdkPort:
 
     def check_services(self):
         control, arm = self.sdk.read_services()
-        if (control != {"motion_service": "ai", "fsm_id": 501}
-                or not isinstance(arm, dict) or arm.get("status") != 0):
+        if control != {"motion_service": "ai", "fsm_id": 501} or not isinstance(arm, dict) or arm.get("status") != 0:
             raise RuntimeError("运控或手臂服务不符合候选条件")
 
     def start_publisher(self):
         if self.hand_profile is None:
             raise RuntimeError("缺少手部增益参数")
-        self.publisher = self.sdk.ChannelPublisher(ARM_COMMAND_TOPIC, getattr(self.sdk, "LowCmdType", self.sdk.LowCmd))
+        self.publisher = self.sdk.ChannelPublisher(ARM_COMMAND_TOPIC, self.sdk.LowCmdType)
         self.publisher.Init()
         for side in HAND_MOTOR_IDS:
             publisher = self.sdk.ChannelPublisher(HAND_COMMAND_TOPICS[side], self.sdk.HandCmdType)
@@ -127,8 +142,9 @@ class ReplaySdkPort:
             publisher.Init()
             self.hand_publishers[side] = publisher
 
-    def write(self, positions, kp, kd, weight, *, side=None, selected_kp=None,
-              selected_kd=None, hand_kp=None, hand_kd=None):
+    def write(
+        self, positions, kp, kd, weight, *, side=None, selected_kp=None, selected_kd=None, hand_kp=None, hand_kd=None
+    ):
         positions = finite_vector(list(positions))  # 在任何通道发送前核对完整28关节目标。
         state = self.snapshot()
         publisher, profile = self.publisher, self.hand_profile
@@ -156,7 +172,7 @@ class ReplaySdkPort:
                 motor = command.motor_cmd[motor_id]
                 # 官方Dex3-1模式编码：低4位电机ID，bit4..6为status=1。
                 motor.mode = motor_id | (1 << 4)
-                motor.q, motor.dq, motor.tau = float(positions[offset+index]), 0.0, 0.0
+                motor.q, motor.dq, motor.tau = float(positions[offset + index]), 0.0, 0.0
                 motor.kp = float(hand_kp if selected else profile["hand_hold_kp"])
                 motor.kd = float(hand_kd if selected else profile["hand_hold_kd"])
             if self.hand_publishers[hand_side].Write(command) is not True:

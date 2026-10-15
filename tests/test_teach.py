@@ -1,25 +1,29 @@
 """示教入口、共享通信与状态检查；不连接机器人。"""
+
 import io
 import json
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from fake_sdk import SimulatedSDK, VirtualClock
+
 from g1_action_studio.cli import main
-from g1_action_studio.config import load_teach_profile, load_replay_profile
+from g1_action_studio.config import load_replay_profile, load_teach_profile
 from g1_action_studio.replay_sdk import ReplaySdkPort, validate_snapshot
 from g1_action_studio.teach import teach
 from g1_action_studio.unitree_binding import create_sdk
-from fake_sdk import SimulatedSDK, VirtualClock
 
 ROOT = Path(__file__).parents[1]
 
 
 class TeachTests(unittest.TestCase):
     def test_preview_does_not_load_sdk_or_write_output(self):
-        with patch("g1_action_studio.teach.create_sdk") as sdk, \
-                patch.object(Path, "exists", return_value=False), \
-                patch("g1_action_studio.teach.write_json") as writer:
+        with (
+            patch("g1_action_studio.teach.create_sdk") as sdk,
+            patch.object(Path, "exists", return_value=False),
+            patch("g1_action_studio.teach.write_json") as writer,
+        ):
             result = teach("eth0", "left", "unused.json", ROOT / "examples/profiles/teach.json")
         self.assertFalse(result["execute"])
         sdk.assert_not_called()
@@ -36,12 +40,15 @@ class TeachTests(unittest.TestCase):
 
     def test_cli_only_accepts_full_teaching_flow(self):
         arguments = ["teach", "eth0", "--side", "left", "--profile", "teach.json", "--output", "recording.json"]
-        with patch("g1_action_studio.teach.teach", return_value={}) as run, \
-                patch("sys.stdout", io.StringIO()):
+        with patch("g1_action_studio.teach.teach", return_value={}) as run, patch("sys.stdout", io.StringIO()):
             self.assertEqual(main(arguments), 0)
         run.assert_called_once_with("eth0", "left", "recording.json", "teach.json", False)
-        for option, value in (("--stage", "hold"), ("--seconds", "3"),
-                              ("--takeover-seconds", "5"), ("--soften-seconds", "8")):
+        for option, value in (
+            ("--stage", "hold"),
+            ("--seconds", "3"),
+            ("--takeover-seconds", "5"),
+            ("--soften-seconds", "8"),
+        ):
             with self.subTest(option=option), patch("sys.stderr", io.StringIO()):
                 with self.assertRaises(SystemExit) as error:
                     main(arguments + [option, value])
@@ -55,23 +62,38 @@ class TeachTests(unittest.TestCase):
 
     def test_rejects_unbounded_or_missing_gains(self):
         profile = json.loads((ROOT / "examples/profiles/teach.json").read_text(encoding="utf-8"))
-        for changes, error in (({"hold_kp": 100}, "保持增益"),
-                               ({"hand_teach_kp": -1}, "手指示教刚度"),
-                               ({"hand_teach_kd": None}, "hand_teach_kd")):
-            with self.subTest(changes=changes), \
-                    patch.object(Path, "read_text", return_value=json.dumps({**profile, **changes})):
+        for changes, error in (
+            ({"hold_kp": 100}, "保持增益"),
+            ({"hand_teach_kp": -1}, "手指示教刚度"),
+            ({"hand_teach_kd": None}, "hand_teach_kd"),
+        ):
+            with (
+                self.subTest(changes=changes),
+                patch.object(Path, "read_text", return_value=json.dumps({**profile, **changes})),
+            ):
                 with self.assertRaisesRegex(ValueError, error):
                     load_teach_profile("unused")
 
     def test_rejects_missing_stale_or_invalid_feedback(self):
-        snapshot = {"at": 10.0, "mode_pr": 0, "mode_machine": 5,
-                    "motor_modes": (1,) * 14, "q": (0.0,) * 28, "dq": (0.0,) * 28}
+        snapshot = {
+            "at": 10.0,
+            "mode_pr": 0,
+            "mode_machine": 5,
+            "motor_modes": (1,) * 14,
+            "q": (0.0,) * 28,
+            "dq": (0.0,) * 28,
+        }
         self.assertIs(validate_snapshot(snapshot, 10.0), snapshot)
         with self.assertRaisesRegex(RuntimeError, "反馈"):
             validate_snapshot(None, 10.0)
-        for key, value in (("at", 9.0), ("at", float("nan")), ("mode_machine", 4),
-                           ("motor_modes", (0,) * 14), ("q", (0.0,) * 14),
-                           ("dq", (float("nan"),) * 28)):
+        for key, value in (
+            ("at", 9.0),
+            ("at", float("nan")),
+            ("mode_machine", 4),
+            ("motor_modes", (0,) * 14),
+            ("q", (0.0,) * 14),
+            ("dq", (float("nan"),) * 28),
+        ):
             with self.subTest(key=key, value=value), self.assertRaises(RuntimeError):
                 validate_snapshot({**snapshot, key: value}, 10.0)
 
@@ -83,15 +105,16 @@ class PortTests(unittest.TestCase):
         port = ReplaySdkPort(sdk, clock)
         port.hand_profile = load_teach_profile(ROOT / "examples/profiles/teach.json")
         port.start_publisher()
-        self.assertTrue(port.write([0.25] * 28, 12, 1.2, .5, side="right",
-                                  selected_kp=2, selected_kd=.6, hand_kp=0, hand_kd=.05))
+        self.assertTrue(
+            port.write([0.25] * 28, 12, 1.2, 0.5, side="right", selected_kp=2, selected_kd=0.6, hand_kp=0, hand_kd=0.05)
+        )
         command = sdk.writes[-1]
         self.assertEqual(command.motor_cmd[15].kp, 12)
         self.assertEqual(command.motor_cmd[22].kp, 2)
-        self.assertEqual(command.motor_cmd[22].q, .25)
+        self.assertEqual(command.motor_cmd[22].q, 0.25)
         self.assertEqual(command.motor_cmd[22].dq, 0)
         self.assertEqual(command.motor_cmd[22].tau, 0)
-        self.assertEqual(command.motor_cmd[29].q, .5)
+        self.assertEqual(command.motor_cmd[29].q, 0.5)
         self.assertTrue(all(m.q == 0 for m in command.motor_cmd[:15] + command.motor_cmd[30:]))
         self.assertEqual(command.crc, 1234)
         self.assertEqual(len(sdk.hand_writes), 2)

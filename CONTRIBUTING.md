@@ -24,6 +24,9 @@ CI 会单独安装 OMPL 与 MuJoCo 运行避碰测试。
 业务模块直接调用这些函数，不跨模块引用带下划线的私有工具函数。
 同一含义只保留一个名称和定义；不要添加同值常量别名、无必要的改名导入或包级转导出。
 调用方直接从定义模块按原名导入；删除无调用的声明，同一模块的导入合并书写。
+Python 源码与测试共用 `pyproject.toml` 中的 Ruff 规则：双引号、四空格缩进、120 字符行宽和统一导入排序。
+可安装 `ruff==0.16.8`，修改后执行 `ruff check src tests` 和 `ruff format --check src tests`；
+需要整理时执行 `ruff check --select I --fix src tests` 和 `ruff format src tests`。
 示教与回放必须保留显式 `--execute`、反馈有效性检查、输出不覆盖和异常释放流程。
 
 示例参数和合成轨迹不能视为通用真机参数。记录验证结果时，区分离线检查、SDK 写入、实测反馈和现场动作/交接。

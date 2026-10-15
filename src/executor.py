@@ -2,13 +2,18 @@
 
 import math
 
-from .constants import (
-    JOINT_COUNT, JOINT_NAMES, ARM_SLOTS, DT, PLAN_SCHEMA, PROFILE,
-)
 from .config import validate_replay_profile
-from .trajectory import frame_digest
+from .constants import (
+    ARM_SLOTS,
+    DT,
+    JOINT_COUNT,
+    JOINT_NAMES,
+    PLAN_SCHEMA,
+    PROFILE,
+)
 from .replay import sample_schedule, screen_schedule
 from .replay_sdk import validate_snapshot
+from .trajectory import frame_digest
 
 
 class Cancelled(RuntimeError):
@@ -16,23 +21,29 @@ class Cancelled(RuntimeError):
 
 
 def validate_plan(plan):
-    if (not isinstance(plan, dict) or plan.get("schema") != PLAN_SCHEMA
-            or plan.get("target_profile") != PROFILE or plan.get("arm_slots") != list(ARM_SLOTS)
-            or plan.get("joint_names") != list(JOINT_NAMES)
-            or plan.get("hardware_enabled") is not False
-            or plan.get("qualification") != "offline_only_not_executable"
-            or plan.get("status") != "offline_numerical_pass"):
+    if (
+        not isinstance(plan, dict)
+        or plan.get("schema") != PLAN_SCHEMA
+        or plan.get("target_profile") != PROFILE
+        or plan.get("arm_slots") != list(ARM_SLOTS)
+        or plan.get("joint_names") != list(JOINT_NAMES)
+        or plan.get("hardware_enabled") is not False
+        or plan.get("qualification") != "offline_only_not_executable"
+        or plan.get("status") != "offline_numerical_pass"
+    ):
         raise ValueError("仅接受数值通过的离线 Arm7 回放计划")
     frames = plan["frames"]
     if len(frames) > 30001 or plan["schedule_sha256"] != frame_digest(frames):
         raise ValueError("回放序列长度或摘要无效")
     limits = plan["model"]["limits_rad"]
-    if (len(limits) != JOINT_COUNT or any(len(pair) != 2 or
-            any(type(x) not in (int, float) or not math.isfinite(x) for x in pair)
-            or pair[0] >= pair[1] for pair in limits)):
+    if len(limits) != JOINT_COUNT or any(
+        len(pair) != 2 or any(type(x) not in (int, float) or not math.isfinite(x) for x in pair) or pair[0] >= pair[1]
+        for pair in limits
+    ):
         raise ValueError("回放计划关节范围无效")
-    screening = screen_schedule(frames, limits, plan["thresholds"]["max_velocity_rad_s"],
-                                plan["thresholds"]["max_acceleration_rad_s2"])
+    screening = screen_schedule(
+        frames, limits, plan["thresholds"]["max_velocity_rad_s"], plan["thresholds"]["max_acceleration_rad_s2"]
+    )
     if screening["violations"]:
         raise ValueError("回放计划重新筛查失败")
     expected = ["takeover", "enter", "replay", "return", "release"]
@@ -51,9 +62,13 @@ def validate_plan(plan):
         if phase == "release" and (weight > previous_weight or frame["q"] != frames[0]["q"]):
             raise ValueError("释放须保持基线并递减权重")
         previous_weight = weight
-    if (phases != expected or frames[0]["weight"] != 0 or frames[-1]["weight"] != 0
-            or frames[-1]["q"] != frames[0]["q"]
-            or frames[0]["q"] != plan["baseline"]["q"]):
+    if (
+        phases != expected
+        or frames[0]["weight"] != 0
+        or frames[-1]["weight"] != 0
+        or frames[-1]["q"] != frames[0]["q"]
+        or frames[0]["q"] != plan["baseline"]["q"]
+    ):
         raise ValueError("回放阶段或起止姿态无效")
     return frames, limits
 
@@ -90,14 +105,20 @@ def execute_replay(plan, profile, port_factory, clock, stop):
             raise RuntimeError("反馈角度超出模型范围")
         if plan.get("body_pose") is not None:
             body = state.get("body_q")
-            if (not isinstance(body, (tuple, list)) or len(body) != ARM_SLOTS[0]
-                    or any(type(v) not in (int, float) or not math.isfinite(v) for v in body)):
+            if (
+                not isinstance(body, (tuple, list))
+                or len(body) != ARM_SLOTS[0]
+                or any(type(v) not in (int, float) or not math.isfinite(v) for v in body)
+            ):
                 raise RuntimeError("缺少有效的腿/腰姿态反馈")
             if max(abs(a - b) for a, b in zip(body, plan["body_pose"])) > 0.02:
                 raise RuntimeError("腿/腰姿态已偏离本次碰撞规划；停止回放")
         if "max_speed_rad_s" in profile and max(map(abs, state["dq"])) > profile["max_speed_rad_s"]:
             raise RuntimeError("反馈速度超限")
-        if "max_offset_rad" in profile and max(abs(q - initial) for q, initial in zip(state["q"], baseline)) > profile["max_offset_rad"]:
+        if (
+            "max_offset_rad" in profile
+            and max(abs(q - initial) for q, initial in zip(state["q"], baseline)) > profile["max_offset_rad"]
+        ):
             raise RuntimeError("反馈偏移超限")
         last_state_at = at
         return state
@@ -116,10 +137,17 @@ def execute_replay(plan, profile, port_factory, clock, stop):
         peak_error = max(peak_error, error)
         if error > profile["max_tracking_error_rad"]:
             raise RuntimeError("跟踪误差超限：{:.6f} rad".format(error))
-        entry = {"t": round(now - began, 6), "phase": phase,
-                 "state_at": state["at"], "q": list(state["q"]), "dq": list(state["dq"]),
-                 "target_q": list(q), "weight": weight, "tracking_error_rad": error,
-                 "write_confirmed": False}
+        entry = {
+            "t": round(now - began, 6),
+            "phase": phase,
+            "state_at": state["at"],
+            "q": list(state["q"]),
+            "dq": list(state["dq"]),
+            "target_q": list(q),
+            "weight": weight,
+            "tracking_error_rad": error,
+            "write_confirmed": False,
+        }
         logs.append(entry)
         # 发送失败也可能已送达，因此先记录尝试权重。
         attempted_weight = weight
@@ -148,7 +176,7 @@ def execute_replay(plan, profile, port_factory, clock, stop):
             raise Cancelled("启动前已取消")
         port = port_factory()
         port.check_services()
-        if hasattr(port, "wait_ready") and not port.wait_ready(5.0, stop):
+        if not port.wait_ready(5.0, stop):
             if stop.is_set():
                 raise Cancelled("等待初始反馈期间已取消")
             raise RuntimeError("等待初始反馈超时，状态缺失")
@@ -184,9 +212,11 @@ def execute_replay(plan, profile, port_factory, clock, stop):
             clock.sleep(DT)
             state = send(baseline, 1.0, "settle")
             now = clock.monotonic()
-            if (max(abs(a - b) for a, b in zip(state["q"], baseline)) <= profile["return_tolerance_rad"]
-                    and max(map(abs, state["dq"])) <= profile["return_speed_rad_s"]
-                    and state["at"] > last_send_at - DT - 1e-9):
+            if (
+                max(abs(a - b) for a, b in zip(state["q"], baseline)) <= profile["return_tolerance_rad"]
+                and max(map(abs, state["dq"])) <= profile["return_speed_rad_s"]
+                and state["at"] > last_send_at - DT - 1e-9
+            ):
                 stable_since = now if stable_since is None else stable_since
                 if now - stable_since >= 0.1 - 1e-9:
                     break
@@ -229,14 +259,25 @@ def execute_replay(plan, profile, port_factory, clock, stop):
                 cleanup_errors.append("关闭失败：{}".format(error))
                 if status == "completed":
                     status = "failed"
-    return {"schema": "g1-arm7-feedback-replay-report-v1", "status": status,
-            "qualification": "unqualified_executor_trial", "control_owner": "unknown",
-            "schedule_sha256": plan["schedule_sha256"], "profile": profile,
-            "release_sent": release_sent, "recovery_release_sent": recovery_release_sent,
-            "hand_release_sent": False,
-            "hand_finish": "手部无权重释放接口；关闭发布器不证明手指已卸力或保持",
-            "handover_confirmed": False, "requires_operator": bool(cleanup_errors) or
-            (bool(errors) and control_attempted),
-            "errors": errors, "cleanup_errors": cleanup_errors, "samples": logs,
-            "metrics": {"command_attempts": len(logs), "confirmed_writes": sum(x["write_confirmed"] for x in logs),
-                        "max_tracking_error_rad": peak_error}}
+    return {
+        "schema": "g1-arm7-feedback-replay-report-v1",
+        "status": status,
+        "qualification": "unqualified_executor_trial",
+        "control_owner": "unknown",
+        "schedule_sha256": plan["schedule_sha256"],
+        "profile": profile,
+        "release_sent": release_sent,
+        "recovery_release_sent": recovery_release_sent,
+        "hand_release_sent": False,
+        "hand_finish": "手部无权重释放接口；关闭发布器不证明手指已卸力或保持",
+        "handover_confirmed": False,
+        "requires_operator": bool(cleanup_errors) or (bool(errors) and control_attempted),
+        "errors": errors,
+        "cleanup_errors": cleanup_errors,
+        "samples": logs,
+        "metrics": {
+            "command_attempts": len(logs),
+            "confirmed_writes": sum(x["write_confirmed"] for x in logs),
+            "max_tracking_error_rad": peak_error,
+        },
+    }

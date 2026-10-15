@@ -26,39 +26,44 @@ def _require_numbers(data, keys, message, *, allow_zero=False):
     """要求正的有限数；显式指定 allow_zero 时允许零。"""
     for key in keys:
         value = data.get(key)
-        if (type(value) not in (int, float) or not math.isfinite(value)
-                or value < 0 or (value == 0 and not allow_zero)):
+        if type(value) not in (int, float) or not math.isfinite(value) or value < 0 or (value == 0 and not allow_zero):
             raise ValueError(message.format(key))
 
 
 def validate_hold_gains(data):
     """示教与回放使用同一套机型和保持增益要求。"""
-    if (not isinstance(data, dict) or data.get("schema") != PROFILE_SCHEMA
-            or data.get("target_profile") != PROFILE):
+    if not isinstance(data, dict) or data.get("schema") != PROFILE_SCHEMA or data.get("target_profile") != PROFILE:
         raise ValueError("参数文件的格式或目标机型不匹配")
-    _require_numbers(data, ("hold_kp", "hold_kd", "hand_hold_kp", "hand_hold_kd"),
-                     "保持参数 {} 必须是正的有限数")
+    _require_numbers(data, ("hold_kp", "hold_kd", "hand_hold_kp", "hand_hold_kd"), "保持参数 {} 必须是正的有限数")
     if data["hold_kp"] > 60 or data["hold_kd"] > 3:
         raise ValueError("保持增益超过候选程序上限")
 
 
 def validate_teach_profile(data):
     validate_hold_gains(data)
-    _require_numbers(data, ("teach_kp", "teach_kd", "hand_teach_kd"),
-                     "示教参数 {} 必须是正的有限数")
-    _require_numbers(data, ("hand_teach_kp",),
-                     "手指示教刚度须为非负数且小于手指保持刚度", allow_zero=True)
+    _require_numbers(data, ("teach_kp", "teach_kd", "hand_teach_kd"), "示教参数 {} 必须是正的有限数")
+    _require_numbers(data, ("hand_teach_kp",), "手指示教刚度须为非负数且小于手指保持刚度", allow_zero=True)
     if data["teach_kp"] > data["hold_kp"]:
         raise ValueError("示教刚度不得大于保持刚度")
     if data["teach_kd"] > data["hold_kd"]:
         raise ValueError("示教阻尼不得大于保持阻尼")
     if data["hand_teach_kp"] >= data["hand_hold_kp"]:
-        raise ValueError("手指示教刚度不得大于保持刚度")
+        raise ValueError("手指示教刚度须小于手指保持刚度")
     if data["hand_teach_kd"] > data["hand_hold_kd"]:
         raise ValueError("手指示教阻尼不得大于保持阻尼")
-    return {key: float(data[key]) for key in (
-        "hold_kp", "hold_kd", "teach_kp", "teach_kd",
-        "hand_hold_kp", "hand_hold_kd", "hand_teach_kp", "hand_teach_kd")}
+    return {
+        key: float(data[key])
+        for key in (
+            "hold_kp",
+            "hold_kd",
+            "teach_kp",
+            "teach_kd",
+            "hand_hold_kp",
+            "hand_hold_kd",
+            "hand_teach_kp",
+            "hand_teach_kd",
+        )
+    }
 
 
 def load_teach_profile(path):
@@ -66,9 +71,20 @@ def load_teach_profile(path):
 
 
 def validate_replay_profile(profile):
-    required = ("hold_kp", "hold_kd", "hand_hold_kp", "hand_hold_kd",
-                "max_tracking_error_rad", "initial_pose_tolerance_rad", "return_tolerance_rad", "return_speed_rad_s",
-                "state_timeout_s", "max_tick_gap_s", "settle_timeout_s", "recovery_release_s")
+    required = (
+        "hold_kp",
+        "hold_kd",
+        "hand_hold_kp",
+        "hand_hold_kd",
+        "max_tracking_error_rad",
+        "initial_pose_tolerance_rad",
+        "return_tolerance_rad",
+        "return_speed_rad_s",
+        "state_timeout_s",
+        "max_tick_gap_s",
+        "settle_timeout_s",
+        "recovery_release_s",
+    )
     if not isinstance(profile, dict):
         raise ValueError("回放参数必须是对象")
     optional = tuple(key for key in ("max_speed_rad_s", "max_offset_rad") if key in profile)

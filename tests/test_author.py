@@ -3,10 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from g1_action_studio.constants import ARM_SLOTS, JOINT_NAMES, PROFILE
 from g1_action_studio.author import load_action
 from g1_action_studio.config import write_json
-
+from g1_action_studio.constants import ARM_SLOTS, JOINT_NAMES, PROFILE
 
 TEST_ROOT = Path(__file__).resolve().parent
 
@@ -19,12 +18,16 @@ def source_file(path, *, gap=False, changed_mode=False):
             continue
         q = [0.0] * 28
         q[10] = 0.1 * (1 - abs(index - 25) / 25)
-        rows.append({"t": t, "q": q, "dq": [0.0] * 28,
-                     "mode_machine": 6 if changed_mode and index >= 25 else 5,
-                     "mode_pr": 0})
-    payload = {"schema": "g1-arm7-dex3-state-recording-v1",
-               "target_profile": PROFILE, "arm_slots": list(ARM_SLOTS), "joint_names": list(JOINT_NAMES),
-               "samples": rows}
+        rows.append(
+            {"t": t, "q": q, "dq": [0.0] * 28, "mode_machine": 6 if changed_mode and index >= 25 else 5, "mode_pr": 0}
+        )
+    payload = {
+        "schema": "g1-arm7-dex3-state-recording-v1",
+        "target_profile": PROFILE,
+        "arm_slots": list(ARM_SLOTS),
+        "joint_names": list(JOINT_NAMES),
+        "samples": rows,
+    }
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 

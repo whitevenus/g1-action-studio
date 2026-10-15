@@ -2,7 +2,7 @@
 
 import math
 
-from .constants import JOINT_COUNT, SIDE_OFFSETS, COLLISION_MODEL, DT, JOINT_NAMES
+from .constants import COLLISION_MODEL, DT, JOINT_COUNT, JOINT_NAMES, SIDE_OFFSETS
 from .trajectory import finite_vector, interpolate_positions, smoothstep
 
 
@@ -17,7 +17,7 @@ class CollisionModel:
         self.model = mujoco.MjModel.from_xml_path(str(COLLISION_MODEL))
         self.data = mujoco.MjData(self.model)
         m = self.model
-        self.joints = [m.joint(name + '_joint').id for name in JOINT_NAMES]
+        self.joints = [m.joint(name + "_joint").id for name in JOINT_NAMES]
         # 双臂和双手关节的角度存储位置
         self.addresses = m.jnt_qposadr[self.joints]
         # 双臂和双手关节的限位（copy独立数组）
@@ -25,21 +25,23 @@ class CollisionModel:
         # 检查并设置机器人实际的腰、腿姿态
         body_q = [0.0] * 15 if body_q is None else list(body_q)
         if len(body_q) != 15 or not all(math.isfinite(v) for v in body_q):
-            raise ValueError('body_q 必须包含 J0–J14 的 15 个有限弧度值')
+            raise ValueError("body_q 必须包含 J0–J14 的 15 个有限弧度值")
         for joint, value in zip(range(15), body_q):
             if not m.jnt_range[joint, 0] <= value <= m.jnt_range[joint, 1]:
-                raise ValueError('腿/腰姿态超出模型范围')
+                raise ValueError("腿/腰姿态超出模型范围")
             self.data.qpos[m.jnt_qposadr[joint]] = value
         self.body_q = body_q
         # 找出所有手臂和手指部件
         arm_bodies = {m.jnt_bodyid[j] for j in self.joints}
         # 找出特殊安装区域（躯干、肩；肘部、腕部；....），间隙为0
         mount_housings = set()
-        for side in ('left', 'right'):
-            for a, b in [('torso_link', side + '_shoulder_roll_link'),
-                         (side + '_elbow_link', side + '_wrist_pitch_link'),
-                         (side + '_wrist_roll_link', side + '_wrist_yaw_link')]:
-                mount_housings.add(frozenset((a + '_collision', b + '_collision')))
+        for side in ("left", "right"):
+            for a, b in [
+                ("torso_link", side + "_shoulder_roll_link"),
+                (side + "_elbow_link", side + "_wrist_pitch_link"),
+                (side + "_wrist_roll_link", side + "_wrist_yaw_link"),
+            ]:
+                mount_housings.add(frozenset((a + "_collision", b + "_collision")))
         # 枚举几何体组合
         self.pairs = []
         self.mount_pairs = []
@@ -59,11 +61,12 @@ class CollisionModel:
                 names = [m.geom(a).name, m.geom(b).name]
                 self.pairs.append((a, b))
                 # 手部内部空间很小，检查穿透，不套用手与躯干之间的2厘米间隙。
-                same_hand = names[0].split('_')[0] == names[1].split('_')[0] and all(
-                    '_hand_' in n or '_wrist_' in n for n in names)
+                same_hand = names[0].split("_")[0] == names[1].split("_")[0] and all(
+                    "_hand_" in n or "_wrist_" in n for n in names
+                )
                 self.mount_pairs.append(frozenset(names) in mount_housings or same_hand)
         # 位移上界为半径 × 转角；半径包含网格偏移和所有下游连杆。
-        self.reach = np.zeros((JOINT_COUNT, m.ngeom))
+        reach = np.zeros((JOINT_COUNT, m.ngeom))
         for column, joint in enumerate(self.joints):
             for geom in range(m.ngeom):
                 body = m.geom_bodyid[geom]
@@ -72,9 +75,10 @@ class CollisionModel:
                     radius += float(np.linalg.norm(m.body_pos[body]))
                     body = m.body_parentid[body]
                 if body:
-                    self.reach[column, geom] = radius
-        self.pair_reach = np.array([np.where((self.reach[:, a] > 0) & (self.reach[:, b] > 0),
-                                            0, self.reach[:, a] + self.reach[:, b]) for a, b in self.pairs])
+                    reach[column, geom] = radius
+        self.pair_reach = np.array(
+            [np.where((reach[:, a] > 0) & (reach[:, b] > 0), 0, reach[:, a] + reach[:, b]) for a, b in self.pairs]
+        )
         self.pairs = np.array(self.pairs)
         self.mount_pairs = np.array(self.mount_pairs)
 
@@ -82,7 +86,7 @@ class CollisionModel:
     def validate(self, q):
         q = finite_vector(list(q))
         if any(not low <= value <= high for value, (low, high) in zip(q, self.limits)):
-            raise ValueError('双臂姿态超出碰撞模型关节范围')
+            raise ValueError("双臂姿态超出碰撞模型关节范围")
         return q
 
     def check_motion(self, frames, margin):
@@ -115,7 +119,7 @@ class CollisionModel:
             ga, gb = self.pairs[index]
             distances[index] = self.mj.mj_geomDistance(m, d, ga, gb, float(distances[index]), None)
         if not self.np.isfinite(distances).all():
-            raise ValueError('碰撞距离计算出现非有限值')
+            raise ValueError("碰撞距离计算出现非有限值")
         return distances - 0.0001  # 为距离查询的数值误差留出余量。
 
     def clearance(self, q, margin=0.02, cutoff=0.5):
@@ -125,8 +129,12 @@ class CollisionModel:
         distances = self._distances(cutoff)
         bad = self.np.flatnonzero(distances < self.np.where(self.mount_pairs, 0, margin))
         pair = None if not len(bad) else [self.model.geom(int(g)).name for g in self.pairs[bad[0]]]
-        return {'valid': pair is None, 'distance_m': float(distances[~self.mount_pairs].min()),
-                'mount_gap_m': float(distances[self.mount_pairs].min()), 'pair': pair}
+        return {
+            "valid": pair is None,
+            "distance_m": float(distances[~self.mount_pairs].min()),
+            "mount_gap_m": float(distances[self.mount_pairs].min()),
+            "pair": pair,
+        }
 
     def edge_clear(self, start, end, margin):
         """递归检查整段关节线段；不能证明区间安全时返回 False。"""
@@ -152,21 +160,22 @@ class CollisionModel:
 def find_path(model, start, end, side, margin=0.02, timeout=5.0):
     """优先直连，否则用 OMPL RRTConnect；全部连接复用 MuJoCo 区间检查。"""
     try:
-        from ompl import base as ob, geometric as og
+        from ompl import base as ob
+        from ompl import geometric as og
     except ImportError as error:
-        raise ImportError('避碰规划需要 OMPL 2.0.1；请在 Linux Python 3.11 环境安装 .[planning]') from error
+        raise ImportError("避碰规划需要 OMPL 2.0.1；请在 Linux Python 3.11 环境安装 .[planning]") from error
     start, end = model.validate(start), model.validate(end)
     if side not in SIDE_OFFSETS or not 0.001 <= margin <= 0.10:
-        raise ValueError('side 须为 left/right；避碰余量须为 0.001–0.10 米')
+        raise ValueError("side 须为 left/right；避碰余量须为 0.001–0.10 米")
     if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout < 0:
-        raise ValueError('规划时间预算须为非负有限数')
+        raise ValueError("规划时间预算须为非负有限数")
     selected = SIDE_OFFSETS[side]
     if any(start[i] != end[i] for i in range(JOINT_COUNT) if i not in selected):
-        raise ValueError('过渡时另一侧手臂必须保持同一姿态')
-    for label, q in [('开始', start), ('结束', end)]:
+        raise ValueError("过渡时另一侧手臂必须保持同一姿态")
+    for label, q in [("开始", start), ("结束", end)]:
         check = model.clearance(q, margin)
-        if not check['valid']:
-            raise ValueError('{}姿态碰撞或余量不足：{}'.format(label, check))
+        if not check["valid"]:
+            raise ValueError("{}姿态碰撞或余量不足：{}".format(label, check))
     if model.edge_clear(start, end, margin):
         return [start, end]
     space = ob.RealVectorStateSpace(len(selected))
@@ -190,7 +199,7 @@ def find_path(model, start, end, side, margin=0.02, timeout=5.0):
 
     validator = MotionValidator(si)
     si.setMotionValidator(validator)
-    setup.setStateValidityChecker(lambda state: model.clearance(positions(state), margin)['valid'])
+    setup.setStateValidityChecker(lambda state: model.clearance(positions(state), margin)["valid"])
     planner = og.RRTConnect(si)
     planner.setRange(0.30)
     setup.setPlanner(planner)
@@ -200,7 +209,7 @@ def find_path(model, start, end, side, margin=0.02, timeout=5.0):
     setup.setStartAndGoalStates(first, last)
     setup.solve(float(timeout))
     if not setup.haveExactSolutionPath():
-        raise ValueError('OMPL 规划预算内未找到完整避碰路径；不生成可播放结果')
+        raise ValueError("OMPL 规划预算内未找到完整避碰路径；不生成可播放结果")
     path = setup.getSolutionPath()
     simplifier = setup.getPathSimplifier()
     simplifier.reduceVertices(path)
@@ -211,20 +220,21 @@ def find_path(model, start, end, side, margin=0.02, timeout=5.0):
 def parameterize_path(path, max_velocity=0.5, max_acceleration=2.0):
     """为已规划的路径安排时长和 50 Hz 采样，不改变空间路径。"""
     if any(not math.isfinite(v) or v <= 0 for v in (max_velocity, max_acceleration)):
-        raise ValueError('速度、加速度上限必须为正有限数')
-    frames = [{'t': 0.0, 'q': list(path[0]), 'phase': 'transition'}]
+        raise ValueError("速度、加速度上限必须为正有限数")
+    frames = [{"t": 0.0, "q": list(path[0]), "phase": "transition"}]
     if all(a == b for a, b in zip(path[0], path[-1])) and len(path) == 2:
         return frames
     for a, b in zip(path, path[1:]):
-        distance = max(abs(y-x) for x,y in zip(a,b))
+        distance = max(abs(y - x) for x, y in zip(a, b))
         # 按五次曲线 10u³ − 15u⁴ + 6u⁵ 的导数最大值计算时长。
-        seconds = max(2*DT, 1.875*distance/max_velocity,
-                      math.sqrt((10/math.sqrt(3))*distance/max_acceleration))
-        steps = math.ceil(seconds/DT)
-        for step in range(1, steps+1):
-            u = step/steps
-            blend = smoothstep(u)
-            frames.append({'t': round(len(frames)*DT, 6), 'q': interpolate_positions(a, b, blend),
-                           'phase': 'transition'})
+        seconds = max(
+            2 * DT, 1.875 * distance / max_velocity, math.sqrt((10 / math.sqrt(3)) * distance / max_acceleration)
+        )
+        steps = math.ceil(seconds / DT)
+        for step in range(1, steps + 1):
+            blend = smoothstep(step / steps)
+            frames.append(
+                {"t": round(len(frames) * DT, 6), "q": interpolate_positions(a, b, blend), "phase": "transition"}
+            )
     frames[-1]["q"] = list(path[-1])
     return frames

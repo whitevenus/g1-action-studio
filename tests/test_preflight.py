@@ -3,7 +3,9 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from g1_action_studio.preflight import (
-    read_arm_service, read_control_state, report_summary,
+    read_arm_service,
+    read_control_state,
+    report_summary,
 )
 
 
@@ -46,17 +48,17 @@ class PreflightTests(unittest.TestCase):
             def CheckMode(self):
                 return 0, {"name": "ai"}
 
-        self.assertEqual(read_control_state(Loco(), Switcher()),
-                         {"motion_service": "ai", "fsm_id": 501})
+        self.assertEqual(read_control_state(Loco(), Switcher()), {"motion_service": "ai", "fsm_id": 501})
 
     def test_service_list_reports_only_official_arm_service(self):
         class RobotState:
             def ServiceList(self):
-                return 0, [SimpleNamespace(name="other", status=1, protect=False),
-                           SimpleNamespace(name="g1_arm_example", status=0, protect=True)]
+                return 0, [
+                    SimpleNamespace(name="other", status=1, protect=False),
+                    SimpleNamespace(name="g1_arm_example", status=0, protect=True),
+                ]
 
-        self.assertEqual(read_arm_service(RobotState()),
-                         {"name": "g1_arm_example", "status": 0, "protect": True})
+        self.assertEqual(read_arm_service(RobotState()), {"name": "g1_arm_example", "status": 0, "protect": True})
 
     def test_summary_never_claims_control_authority(self):
         report = {

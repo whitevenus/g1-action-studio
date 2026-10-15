@@ -1,6 +1,6 @@
 import contextlib
-import io
 import hashlib
+import io
 import json
 import signal
 import sys
@@ -9,18 +9,21 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from g1_action_studio.constants import ARM_SLOTS, COLLISION_MODEL, JOINT_NAMES, PROFILE
+from fake_sdk import SimulatedSDK, VirtualClock
+
 from g1_action_studio.cli import main
+from g1_action_studio.constants import ARM_SLOTS, COLLISION_MODEL, JOINT_NAMES, PROFILE
 from g1_action_studio.live_replay import replay
 from g1_action_studio.replay import build_schedule, retime_frames, screen_schedule
-from fake_sdk import SimulatedSDK, VirtualClock
 
 
 class LiveReplayTests(unittest.TestCase):
     def setUp(self):
         try:
-            import ompl
+            import ompl  # noqa: F401 -- 实际导入以确认规划依赖可用。
+
             from g1_action_studio.collision import CollisionModel
+
             CollisionModel()
         except ImportError as error:
             self.skipTest(str(error))
@@ -30,31 +33,63 @@ class LiveReplayTests(unittest.TestCase):
         self.source = self.root / "recording.json"
         self.profile_path = self.root / "profile.json"
         self.output = self.root / "report.json"
-        self.safe = json.loads((Path(__file__).parents[1] / "examples/transition/action-b.json").read_text())["samples"][0]["q"]
+        self.safe = json.loads((Path(__file__).parents[1] / "examples/transition/action-b.json").read_text())[
+            "samples"
+        ][0]["q"]
         self.initial = list(self.safe)
         self.initial[0] += 0.02
         samples = []
         for i in range(51):
             q = list(self.safe)
             q[3] += 0.002 * i
-            samples.append({"t": i * 0.02, "q": q, "dq": [0.1] * 28,
-                            "mode_pr": 0, "mode_machine": 5})
-        self.source.write_text(json.dumps({"schema": "g1-arm7-dex3-state-recording-v1",
-            "target_profile": PROFILE, "arm_slots": list(ARM_SLOTS), "joint_names": list(JOINT_NAMES), "samples": samples}), encoding="utf-8")
+            samples.append({"t": i * 0.02, "q": q, "dq": [0.1] * 28, "mode_pr": 0, "mode_machine": 5})
+        self.source.write_text(
+            json.dumps(
+                {
+                    "schema": "g1-arm7-dex3-state-recording-v1",
+                    "target_profile": PROFILE,
+                    "arm_slots": list(ARM_SLOTS),
+                    "joint_names": list(JOINT_NAMES),
+                    "samples": samples,
+                }
+            ),
+            encoding="utf-8",
+        )
         candidate = Path(__file__).parents[1] / "examples/profiles/replay.json"
         self.profile_path.write_text(candidate.read_text(encoding="utf-8"), encoding="utf-8")
         self.model = COLLISION_MODEL
 
     def run_replay(self, execute=False):
-        return replay("unused", self.source, self.profile_path, self.model,
-                      self.output, side="left", speed_scale=0.5, execute=execute)
+        return replay(
+            "unused",
+            self.source,
+            self.profile_path,
+            self.model,
+            self.output,
+            side="left",
+            speed_scale=0.5,
+            execute=execute,
+        )
 
     def test_preview_and_cli_do_not_import_sdk_or_initialize_network(self):
-        with patch.dict(sys.modules, {"unitree_sdk2py": None}), \
-                patch("g1_action_studio.live_replay.create_sdk") as factory, \
-                contextlib.redirect_stdout(io.StringIO()):
-            code = main(["replay", "unused", str(self.source), "--profile", str(self.profile_path),
-                         "--model", str(self.model), "--output", str(self.output)])
+        with (
+            patch.dict(sys.modules, {"unitree_sdk2py": None}),
+            patch("g1_action_studio.live_replay.create_sdk") as factory,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            code = main(
+                [
+                    "replay",
+                    "unused",
+                    str(self.source),
+                    "--profile",
+                    str(self.profile_path),
+                    "--model",
+                    str(self.model),
+                    "--output",
+                    str(self.output),
+                ]
+            )
         self.assertEqual(code, 0)
         factory.assert_not_called()
         report = json.loads(self.output.read_text(encoding="utf-8"))
@@ -65,8 +100,10 @@ class LiveReplayTests(unittest.TestCase):
     def test_execute_uses_fresh_baseline_holds_other_arm_and_returns_before_release(self):
         clock = VirtualClock()
         sdk = SimulatedSDK(clock, self.initial)
-        with patch("g1_action_studio.live_replay.create_sdk", return_value=sdk), \
-                patch("g1_action_studio.live_replay.time", clock):
+        with (
+            patch("g1_action_studio.live_replay.create_sdk", return_value=sdk),
+            patch("g1_action_studio.live_replay.time", clock),
+        ):
             result = self.run_replay(execute=True)
         self.assertEqual(result["status"], "completed")
         self.assertTrue(result["release_sent"])
@@ -100,6 +137,7 @@ class LiveReplayTests(unittest.TestCase):
         samples = json.loads(original)["samples"]
         self.assertEqual(report["plan"]["baseline"]["q"], samples[0]["q"])
         from g1_action_studio.author import load_action
+
         self.source.write_bytes(original)
         draft = load_action(self.source, None, None, "trial.left_replay", 1, "单臂示教回放试验")
         self.assertEqual(draft["source"]["sha256"], hashlib.sha256(original).hexdigest())
@@ -125,8 +163,10 @@ class LiveReplayTests(unittest.TestCase):
     def test_live_baseline_outside_model_closes_without_creating_publisher(self):
         clock = VirtualClock()
         sdk = SimulatedSDK(clock, [4.0] * 28)
-        with patch("g1_action_studio.live_replay.create_sdk", return_value=sdk), \
-                patch("g1_action_studio.live_replay.time", clock):
+        with (
+            patch("g1_action_studio.live_replay.create_sdk", return_value=sdk),
+            patch("g1_action_studio.live_replay.time", clock),
+        ):
             result = self.run_replay(execute=True)
         self.assertEqual(result["status"], "failed")
         self.assertFalse(sdk.publisher_started)
@@ -136,14 +176,18 @@ class LiveReplayTests(unittest.TestCase):
         clock = VirtualClock()
         sdk = SimulatedSDK(clock, self.initial)
         handlers = {}
+
         def cancel():
             if clock.now > 7:
                 handlers[signal.SIGINT](signal.SIGINT, None)
+
         sdk.before_step = cancel
-        with patch("g1_action_studio.live_replay.create_sdk", return_value=sdk), \
-                patch("g1_action_studio.live_replay.time", clock), \
-                patch("g1_action_studio.live_replay.signal.getsignal", return_value="previous"), \
-                patch("g1_action_studio.live_replay.signal.signal", handlers.__setitem__):
+        with (
+            patch("g1_action_studio.live_replay.create_sdk", return_value=sdk),
+            patch("g1_action_studio.live_replay.time", clock),
+            patch("g1_action_studio.live_replay.signal.getsignal", return_value="previous"),
+            patch("g1_action_studio.live_replay.signal.signal", handlers.__setitem__),
+        ):
             result = self.run_replay(execute=True)
         self.assertEqual(result["status"], "cancelled")
         report = json.loads(self.output.read_text(encoding="utf-8"))

@@ -1,20 +1,22 @@
 """公共实现的行为回归：数值、参数快照与输出不覆盖。"""
+
 import io
 import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from g1_action_studio.constants import DT
 from g1_action_studio.config import dump_json, load_replay_profile, write_json
+from g1_action_studio.constants import DT
 from g1_action_studio.replay import screen_schedule
 from g1_action_studio.trajectory import hold_other_side, joint_motion, metrics
 
 
 class SharedBehaviorTests(unittest.TestCase):
     def test_joint_differences_and_screening_agree(self):
-        frames = [{"t": i * DT, "q": [value] + [0.0] * 27, "phase": "replay"}
-                  for i, value in enumerate((0.0, 0.002, 0.006))]
+        frames = [
+            {"t": i * DT, "q": [value] + [0.0] * 27, "phase": "replay"} for i, value in enumerate((0.0, 0.002, 0.006))
+        ]
         motion = joint_motion(frames)
         self.assertEqual(motion[0][0], (0.0, 0.002, 0.006))
         self.assertAlmostEqual(motion[0][1][0], 0.1)
@@ -22,8 +24,9 @@ class SharedBehaviorTests(unittest.TestCase):
         self.assertAlmostEqual(motion[0][2][0], 5.0)
         result = screen_schedule(frames, [(-1, 1)] * 28, 0.15, 4.0)
         self.assertEqual(result["metrics"], metrics(frames))
-        self.assertEqual([(v["kind"], v["t"]) for v in result["violations"]],
-                         [("velocity", 0.04), ("acceleration", 0.04)])
+        self.assertEqual(
+            [(v["kind"], v["t"]) for v in result["violations"]], [("velocity", 0.04), ("acceleration", 0.04)]
+        )
 
     def test_single_arm_planning_preserves_input_and_holds_opposite_side(self):
         frames = [{"t": 0.0, "q": [0.1] * 28}, {"t": DT, "q": [0.2] * 28}]
@@ -46,9 +49,11 @@ class SharedBehaviorTests(unittest.TestCase):
     def test_replay_profile_checks_both_gain_limits_and_feedback_thresholds(self):
         path = Path(__file__).parents[1] / "examples/profiles/replay.json"
         profile = json.loads(path.read_text(encoding="utf-8"))
-        for key, value, error in (("hold_kp", 61, "保持增益"),
-                                  ("state_timeout_s", 0, "state_timeout_s")):
-            with self.subTest(key=key), patch.object(Path, "read_text", return_value=json.dumps({**profile, key: value})):
+        for key, value, error in (("hold_kp", 61, "保持增益"), ("state_timeout_s", 0, "state_timeout_s")):
+            with (
+                self.subTest(key=key),
+                patch.object(Path, "read_text", return_value=json.dumps({**profile, key: value})),
+            ):
                 with self.assertRaisesRegex(ValueError, error):
                     load_replay_profile(path)
 

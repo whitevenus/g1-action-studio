@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 
-from .constants import ARM_COMMAND_TOPIC, LOWSTATE_TOPIC
 from .config import write_json
+from .constants import ARM_COMMAND_TOPIC, LOWSTATE_TOPIC
 from .unitree_binding import create_service_clients, read_arm_service, read_control_state
 
 
@@ -41,12 +41,19 @@ def preflight(interface, seconds, output):
         "schema": "g1-arm7-readonly-preflight-v3",
         "qualification": "read_only_observation_control_authority_unconfirmed",
         "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
-        "interface": interface, "requested_seconds": seconds,
-        "fsm_before": None, "fsm_after": None,
-        "arm_service_before": None, "arm_service_after": None,
-        "observation": {"arm_sdk_messages": 0, "lowstate_messages": 0,
-                        "mode_pairs": [], "first_lowstate_at_seconds": None,
-                        "last_lowstate_at_seconds": None},
+        "interface": interface,
+        "requested_seconds": seconds,
+        "fsm_before": None,
+        "fsm_after": None,
+        "arm_service_before": None,
+        "arm_service_after": None,
+        "observation": {
+            "arm_sdk_messages": 0,
+            "lowstate_messages": 0,
+            "mode_pairs": [],
+            "first_lowstate_at_seconds": None,
+            "last_lowstate_at_seconds": None,
+        },
         "exclusive_control": "unconfirmed",
         "errors": [],
     }

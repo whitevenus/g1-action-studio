@@ -27,15 +27,14 @@ def read_arm_service(robot_state):
         raise RuntimeError("ServiceList 失败：返回码={!r}".format(code))
     for service in services:
         if service.name == "g1_arm_example":
-            return {"name": service.name, "status": service.status,
-                    "protect": service.protect}
+            return {"name": service.name, "status": service.status, "protect": service.protect}
     return None
 
 
 def create_service_clients():
     """构造客户端会创建 RPC 通道；仅在网络已初始化后调用。"""
-    from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
     from unitree_sdk2py.comm.motion_switcher.motion_switcher_client import MotionSwitcherClient
+    from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
     from unitree_sdk2py.go2.robot_state.robot_state_client import RobotStateClient
 
     clients = []
@@ -49,11 +48,14 @@ def create_service_clients():
 
 def arm_snapshot(message, clock):
     motors = [message.motor_state[i] for i in ARM_SLOTS]
-    state = {"at": clock.monotonic(), "mode_pr": int(message.mode_pr),
-            "mode_machine": int(message.mode_machine),
-            "motor_modes": tuple(int(m.mode) for m in motors),
-            "q": tuple(float(m.q) for m in motors),
-            "dq": tuple(float(m.dq) for m in motors)}
+    state = {
+        "at": clock.monotonic(),
+        "mode_pr": int(message.mode_pr),
+        "mode_machine": int(message.mode_machine),
+        "motor_modes": tuple(int(m.mode) for m in motors),
+        "q": tuple(float(m.q) for m in motors),
+        "dq": tuple(float(m.dq) for m in motors),
+    }
     try:
         state["body_q"] = tuple(float(message.motor_state[i].q) for i in range(ARM_SLOTS[0]))
     except (AttributeError, IndexError, TypeError, ValueError):
@@ -84,17 +86,17 @@ def close_channels(port):
 
 class UnitreeReplaySDK:
     def __init__(self):
-        from unitree_sdk2py.idl.default import (
-            unitree_hg_msg_dds__LowCmd_, unitree_hg_msg_dds__LowState_,
-            unitree_hg_msg_dds__HandCmd_,
-        )
-        from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_, HandCmd_, HandState_
-        from unitree_sdk2py.utils.crc import CRC
         from unitree_sdk2py.core import channel
+        from unitree_sdk2py.idl.default import (
+            unitree_hg_msg_dds__HandCmd_,
+            unitree_hg_msg_dds__LowCmd_,
+        )
+        from unitree_sdk2py.idl.unitree_hg.msg.dds_ import HandCmd_, HandState_, LowCmd_, LowState_
+        from unitree_sdk2py.utils.crc import CRC
 
         # 类型交给 Channel，默认工厂只负责构造带 35 个电机槽位的实例。
         self.LowCmdType, self.LowStateType = LowCmd_, LowState_
-        self.LowCmd, self.LowState = unitree_hg_msg_dds__LowCmd_, unitree_hg_msg_dds__LowState_
+        self.LowCmd = unitree_hg_msg_dds__LowCmd_
         self.HandCmd, self.HandCmdType, self.HandStateType = unitree_hg_msg_dds__HandCmd_, HandCmd_, HandState_
         self.CRC = CRC
         self.channel = channel

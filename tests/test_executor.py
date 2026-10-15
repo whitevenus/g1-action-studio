@@ -5,12 +5,13 @@ import unittest
 from threading import Event
 from unittest.mock import Mock, patch
 
+from fake_sdk import SIMULATION_PROFILE, SimulatedSDK, VirtualClock, simulate_replay
+
 from g1_action_studio.constants import ARM_SLOTS, COLLISION_MODEL, JOINT_NAMES, PROFILE
-from g1_action_studio.trajectory import frame_digest
 from g1_action_studio.executor import execute_replay
 from g1_action_studio.replay import build_schedule, load_limits
 from g1_action_studio.replay_sdk import ReplaySdkPort
-from fake_sdk import SIMULATION_PROFILE, SimulatedSDK, VirtualClock, simulate_replay
+from g1_action_studio.trajectory import frame_digest
 
 
 def make_plan():
@@ -18,12 +19,21 @@ def make_plan():
     for i, frame in enumerate(source):
         frame["q"][3] = 0.1 * math.sin(math.pi * i / 100) ** 2
     frames, phases = build_schedule(source, [0.0] * 28, takeover=0.5, enter=1, return_seconds=1, release=0.5)
-    return {"schema": "g1-arm7-dex3-offline-replay-plan-v1", "target_profile": PROFILE,
-            "arm_slots": list(ARM_SLOTS), "joint_names": list(JOINT_NAMES), "hardware_enabled": False,
-            "qualification": "offline_only_not_executable", "status": "offline_numerical_pass",
-            "baseline": {"q": [0.0] * 28}, "model": {"limits_rad": load_limits(COLLISION_MODEL)},
-            "thresholds": {"max_velocity_rad_s": 1, "max_acceleration_rad_s2": 20},
-            "frames": frames, "phases": phases, "schedule_sha256": frame_digest(frames)}
+    return {
+        "schema": "g1-arm7-dex3-offline-replay-plan-v1",
+        "target_profile": PROFILE,
+        "arm_slots": list(ARM_SLOTS),
+        "joint_names": list(JOINT_NAMES),
+        "hardware_enabled": False,
+        "qualification": "offline_only_not_executable",
+        "status": "offline_numerical_pass",
+        "baseline": {"q": [0.0] * 28},
+        "model": {"limits_rad": load_limits(COLLISION_MODEL)},
+        "thresholds": {"max_velocity_rad_s": 1, "max_acceleration_rad_s2": 20},
+        "frames": frames,
+        "phases": phases,
+        "schedule_sha256": frame_digest(frames),
+    }
 
 
 class ExecutorTests(unittest.TestCase):
@@ -38,6 +48,7 @@ class ExecutorTests(unittest.TestCase):
         def factory():
             self.port = ReplaySdkPort(self.sdk, self.clock)
             return self.port
+
         result = execute_replay(self.plan, self.profile, factory, self.clock, self.stop)
         self.assertTrue(all(r.closed for r in self.sdk.resources))
         return result
@@ -58,17 +69,23 @@ class ExecutorTests(unittest.TestCase):
         self.assertLess(max(map(abs, self.sdk.q)), self.profile["return_tolerance_rad"])
 
     def test_rejects_plan_before_creating_sdk_port(self):
-        for change in ({"status": "offline_numerical_rejected"}, {"hardware_enabled": True},
-                       {"schedule_sha256": "tampered"}):
+        for change in (
+            {"status": "offline_numerical_rejected"},
+            {"hardware_enabled": True},
+            {"schedule_sha256": "tampered"},
+        ):
             factory = Mock()
             with self.assertRaises(ValueError):
                 execute_replay({**self.plan, **change}, self.profile, factory, self.clock, self.stop)
             factory.assert_not_called()
 
     def test_invalid_profile_is_rejected_before_any_sdk_port(self):
-        for bad in ({}, {**self.profile, "state_timeout_s": float("nan")},
-                    {**self.profile, "max_tick_gap_s": 0.001},
-                    {**self.profile, "return_tolerance_rad": 0.3}):
+        for bad in (
+            {},
+            {**self.profile, "state_timeout_s": float("nan")},
+            {**self.profile, "max_tick_gap_s": 0.001},
+            {**self.profile, "return_tolerance_rad": 0.3},
+        ):
             factory = Mock()
             with self.assertRaises(ValueError):
                 execute_replay(self.plan, bad, factory, self.clock, self.stop)
@@ -84,11 +101,13 @@ class ExecutorTests(unittest.TestCase):
 
     def test_delayed_first_state_is_waited_for_before_publisher_creation(self):
         self.sdk.drop_states = True
+
         def arrive():
             if self.clock.now >= 0.1:
                 self.sdk.drop_states = False
             if self.clock.now < 0.1:
                 self.assertFalse(self.sdk.publisher_started)
+
         self.sdk.before_step = arrive
         report = self.run_executor()
         self.assertEqual(report["status"], "completed")
@@ -97,6 +116,7 @@ class ExecutorTests(unittest.TestCase):
         def drop(command):
             if self.clock.now > 3.3 and command.motor_cmd[29].q == 0:
                 self.sdk.drop_states = True
+
         self.sdk.before_write = drop
         report = self.run_executor()
         self.assertEqual(report["status"], "failed")
@@ -120,8 +140,7 @@ class ExecutorTests(unittest.TestCase):
         self.assertFalse(self.sdk.resources)
 
     def test_rejects_nonmonotonic_weights_and_invalid_phases(self):
-        for mutation in (lambda p: p["frames"][2].update(weight=0),
-                         lambda p: p["frames"][30].update(phase="unknown")):
+        for mutation in (lambda p: p["frames"][2].update(weight=0), lambda p: p["frames"][30].update(phase="unknown")):
             plan = copy.deepcopy(self.plan)
             mutation(plan)
             plan["schedule_sha256"] = frame_digest(plan["frames"])
@@ -154,6 +173,7 @@ class ExecutorTests(unittest.TestCase):
         def cancel():
             if self.clock.now > 4.7:
                 self.stop.set()
+
         self.sdk.before_step = cancel
         report = self.run_executor()
         self.assertEqual(report["status"], "cancelled")
@@ -166,11 +186,13 @@ class ExecutorTests(unittest.TestCase):
 
     def test_first_positive_write_failure_still_recovers(self):
         fired = False
+
         def fail(command):
             nonlocal fired
             if not fired and command.motor_cmd[29].q > 0:
                 fired = True
                 self.sdk.fail_next_write = True
+
         self.sdk.before_write = fail
         report = self.run_executor()
         self.assertEqual(report["status"], "failed")
@@ -186,6 +208,7 @@ class ExecutorTests(unittest.TestCase):
                 if case == "offset":
                     self.profile["max_offset_rad"] = 0.2
                 writes_at_fault = []
+
                 def invalidate():
                     if self.clock.now >= 3.2 and not writes_at_fault:
                         writes_at_fault.append(len(self.sdk.writes))
@@ -206,6 +229,7 @@ class ExecutorTests(unittest.TestCase):
                         else:
                             self.sdk.q[0] = 0.3
                             self.sdk.stuck = True
+
                 self.sdk.before_step = invalidate
                 report = self.run_executor()
                 self.assertEqual(report["status"], "failed")
@@ -218,11 +242,13 @@ class ExecutorTests(unittest.TestCase):
 
     def test_tick_overrun_aborts_and_preserves_fixed_recovery(self):
         fired = False
+
         def stall():
             nonlocal fired
             if not fired and self.clock.now > 3.2:
                 fired = True
                 self.clock.now += 0.2
+
         self.sdk.before_step = stall
         report = self.run_executor()
         self.assertIn("控制周期超时", report["errors"][0]["message"])
@@ -230,9 +256,11 @@ class ExecutorTests(unittest.TestCase):
 
     def test_return_timeout_does_not_report_completed(self):
         self.profile["return_tolerance_rad"] = 0.00001
+
         def stuck():
             if self.clock.now > 4.8:
                 self.sdk.stuck = True
+
         self.sdk.before_step = stuck
         report = self.run_executor()
         self.assertEqual(report["status"], "failed")
@@ -241,10 +269,12 @@ class ExecutorTests(unittest.TestCase):
 
     def test_position_in_tolerance_but_speed_not_settled_blocks_release(self):
         original = self.sdk._publish_state
+
         def moving():
             original()
             if self.port is not None and self.clock.now > 7.4:
                 self.port.latest = {**self.port.latest, "dq": (0.1,) * 14}
+
         self.sdk._publish_state = moving
         report = self.run_executor()
         self.assertEqual(report["status"], "failed")
@@ -262,10 +292,12 @@ class ExecutorTests(unittest.TestCase):
 
     def test_invalid_feedback_during_release_blocks_remaining_writes(self):
         count = []
+
         def invalidate():
             if self.clock.now > 7.8 and not count:
                 self.sdk.mode_machine = 4
                 count.append(len(self.sdk.writes))
+
         self.sdk.before_step = invalidate
         report = self.run_executor()
         self.assertEqual(report["status"], "failed")
@@ -290,10 +322,12 @@ class ExecutorTests(unittest.TestCase):
 
     def test_partial_adapter_initialization_closes_created_subscription(self):
         original = self.sdk.ChannelSubscriber
+
         def fail(topic, kind):
             if topic == "rt/arm_sdk":
                 raise RuntimeError("模拟订阅初始化失败")
             return original(topic, kind)
+
         self.sdk.ChannelSubscriber = fail
         report = self.run_executor()
         self.assertEqual(report["status"], "failed")
@@ -302,8 +336,10 @@ class ExecutorTests(unittest.TestCase):
     def test_all_simulation_scenarios_close_resources(self):
         for scenario in ("normal", "tracking-error", "state-timeout", "mode-change", "send-failure", "cancel"):
             report = simulate_replay(self.plan, scenario)
-            self.assertEqual(report["status"], "completed" if scenario == "normal" else
-                             "cancelled" if scenario == "cancel" else "failed")
+            self.assertEqual(
+                report["status"],
+                "completed" if scenario == "normal" else "cancelled" if scenario == "cancel" else "failed",
+            )
             self.assertFalse(report["hardware_enabled"])
             self.assertTrue(report["resources_closed"])
 

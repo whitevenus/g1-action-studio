@@ -1,4 +1,5 @@
 """实际使用流程：录制直接回放、制作后回放、衔接后回放。"""
+
 import contextlib
 import io
 import json
@@ -7,14 +8,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from g1_action_studio.constants import ACTION_SCHEMA, ARM_SLOTS, COLLISION_MODEL, JOINT_NAMES, PROFILE
+from fake_sdk import SimulatedSDK, VirtualClock
+
 from g1_action_studio.author import load_action
 from g1_action_studio.cli import main
 from g1_action_studio.config import write_json
+from g1_action_studio.constants import ACTION_SCHEMA, ARM_SLOTS, COLLISION_MODEL, JOINT_NAMES, PROFILE
 from g1_action_studio.live_replay import replay
 from g1_action_studio.transition import plan_transition
-from fake_sdk import SimulatedSDK, VirtualClock
-
 
 ROOT = Path(__file__).parents[1]
 
@@ -22,8 +23,10 @@ ROOT = Path(__file__).parents[1]
 class ActionFixtures:
     def setUp(self):
         try:
-            import ompl
+            import ompl  # noqa: F401 -- 实际导入以确认规划依赖可用。
+
             from g1_action_studio.collision import CollisionModel
+
             CollisionModel()
         except ImportError as error:
             self.skipTest(str(error))
@@ -37,10 +40,16 @@ class ActionFixtures:
         self.write_recording(self.source, self.q)
 
     def write_recording(self, path, q, seconds=1.0, synthetic=False):
-        data = {"schema": "g1-arm7-dex3-state-recording-v1", "target_profile": PROFILE,
-                "arm_slots": list(ARM_SLOTS), "joint_names": list(JOINT_NAMES),
-                "samples": [{"t": round(i * 0.02, 6), "q": list(q), "dq": [0.0] * 28,
-                             "mode_pr": 0, "mode_machine": 5} for i in range(round(seconds / 0.02) + 1)]}
+        data = {
+            "schema": "g1-arm7-dex3-state-recording-v1",
+            "target_profile": PROFILE,
+            "arm_slots": list(ARM_SLOTS),
+            "joint_names": list(JOINT_NAMES),
+            "samples": [
+                {"t": round(i * 0.02, 6), "q": list(q), "dq": [0.0] * 28, "mode_pr": 0, "mode_machine": 5}
+                for i in range(round(seconds / 0.02) + 1)
+            ],
+        }
         if synthetic:
             data["qualification"] = "synthetic_example_not_for_hardware"
         write_json(data, path)
@@ -48,11 +57,14 @@ class ActionFixtures:
     def execute(self, source, q=None, **kwargs):
         clock = VirtualClock()
         sdk = SimulatedSDK(clock, self.q if q is None else q)
-        with patch("g1_action_studio.live_replay.create_sdk", return_value=sdk), \
-                patch("g1_action_studio.live_replay.time", clock), \
-                contextlib.redirect_stdout(io.StringIO()):
-            result = replay("unused", source, self.profile, COLLISION_MODEL, self.output,
-                            speed_scale=1.0, execute=True, **kwargs)
+        with (
+            patch("g1_action_studio.live_replay.create_sdk", return_value=sdk),
+            patch("g1_action_studio.live_replay.time", clock),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            result = replay(
+                "unused", source, self.profile, COLLISION_MODEL, self.output, speed_scale=1.0, execute=True, **kwargs
+            )
         return result, sdk, json.loads(self.output.read_text(encoding="utf-8"))
 
 
@@ -100,8 +112,10 @@ class CombinedFlowTests(ActionFixtures, unittest.TestCase):
     def setUp(self):
         super().setUp()
         try:
-            import ompl
+            import ompl  # noqa: F401 -- 实际导入以确认规划依赖可用。
+
             from g1_action_studio.collision import CollisionModel
+
             model = CollisionModel()
         except ImportError as error:
             self.skipTest(str(error))
@@ -125,8 +139,9 @@ class CombinedFlowTests(ActionFixtures, unittest.TestCase):
         self.assertEqual(data["transition_metrics"]["duration_s"], 0.0)
         result, sdk, report = self.execute(action, q=self.q)
         self.assertEqual(result["status"], "completed", report["errors"])
-        self.assertEqual([p["phase"] for p in report["plan"]["phases"]],
-                         ["takeover", "enter", "replay", "return", "release"])
+        self.assertEqual(
+            [p["phase"] for p in report["plan"]["phases"]], ["takeover", "enter", "replay", "return", "release"]
+        )
         self.assertEqual(report["plan"]["body_pose"], [0.0] * 15)
         self.assertTrue(all(r.closed for r in sdk.resources))
 
@@ -147,6 +162,7 @@ class CombinedFlowTests(ActionFixtures, unittest.TestCase):
 
     def test_nonzero_bridge_and_return_route_execute_as_one_action(self):
         from g1_action_studio.collision import CollisionModel
+
         start = json.loads((ROOT / "examples/transition/action-a.json").read_text())["samples"][0]["q"]
         self.before = self.root / "routed-start.json"
         self.write_recording(self.before, start, seconds=0.1)
@@ -180,13 +196,17 @@ class CombinedFlowTests(ActionFixtures, unittest.TestCase):
         action = self.combined()
         clock = VirtualClock()
         sdk = SimulatedSDK(clock, self.q)
+
         def move_body():
             if sdk.publisher_started and clock.now > 4.0:
                 sdk.body_q[0] = 0.03
+
         sdk.before_step = move_body
-        with patch("g1_action_studio.live_replay.create_sdk", return_value=sdk), \
-                patch("g1_action_studio.live_replay.time", clock), \
-                contextlib.redirect_stdout(io.StringIO()):
+        with (
+            patch("g1_action_studio.live_replay.create_sdk", return_value=sdk),
+            patch("g1_action_studio.live_replay.time", clock),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
             result = replay("unused", action, self.profile, COLLISION_MODEL, self.output, execute=True)
         report = json.loads(self.output.read_text(encoding="utf-8"))
         self.assertEqual(result["status"], "failed")
