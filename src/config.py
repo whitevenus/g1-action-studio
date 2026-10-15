@@ -7,8 +7,8 @@ from pathlib import Path
 from .constants import DT, PROFILE, PROFILE_SCHEMA
 
 
-def read_json(path, *, encoding="utf-8-sig"):
-    return json.loads(Path(path).read_text(encoding=encoding))
+def read_json(path):
+    return json.loads(Path(path).read_text(encoding="utf-8-sig"))
 
 
 def dump_json(data, stream, *, compact=False, allow_nan=False):

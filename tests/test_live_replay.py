@@ -12,9 +12,59 @@ from unittest.mock import patch
 from fake_sdk import SimulatedSDK, VirtualClock
 
 from g1_action_studio.cli import main
-from g1_action_studio.constants import ARM_SLOTS, COLLISION_MODEL, JOINT_NAMES, PROFILE
+from g1_action_studio.config import write_json
+from g1_action_studio.constants import ARM_SLOTS, JOINT_NAMES, PROFILE
 from g1_action_studio.live_replay import replay
 from g1_action_studio.replay import build_schedule, retime_frames, screen_schedule
+
+
+class ReplayReportTests(unittest.TestCase):
+    """只替换规划和执行边界，验证入口及报告，不依赖几何环境或连接机器人。"""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory(dir=Path(__file__).parent)
+        self.addCleanup(folder.cleanup)
+        self.source = Path(folder.name) / "recording.json"
+        self.output = Path(folder.name) / "report.json"
+        root = Path(__file__).parents[1]
+        self.profile = root / "examples/profiles/replay.json"
+        recording = json.loads((root / "examples/transition/action-b.json").read_text(encoding="utf-8"))
+        recording.pop("qualification", None)
+        write_json(recording, self.source)
+
+    def test_preview_reports_plan_metrics_without_connecting(self):
+        metrics = {"duration_s": 2.0, "frame_count": 101}
+        with (
+            patch("g1_action_studio.live_replay._plan", autospec=True, return_value={"metrics": metrics}),
+            patch("g1_action_studio.live_replay.create_sdk") as connect,
+        ):
+            result = replay("unused", self.source, self.profile, self.output)
+        report = json.loads(self.output.read_text(encoding="utf-8"))
+        self.assertEqual(result["status"], "preview")
+        self.assertEqual(result["metrics"], metrics)
+        self.assertEqual(result["plan_metrics"], metrics)
+        self.assertEqual(report["plan"]["metrics"], metrics)
+        self.assertFalse(report["hardware_enabled"])
+        connect.assert_not_called()
+
+    def test_execution_report_keeps_plan_and_execution_metrics_distinct(self):
+        metrics = {"command_attempts": 101, "confirmed_writes": 101}
+        plan_metrics = {"duration_s": 2.0, "frame_count": 101}
+        report = {
+            "status": "completed",
+            "qualification": "unqualified_executor_trial",
+            "metrics": metrics,
+            "plan": {"metrics": plan_metrics},
+            "release_sent": True,
+        }
+        with patch("g1_action_studio.live_replay._execute", autospec=True, return_value=report):
+            result = replay("unused", self.source, self.profile, self.output, execute=True)
+        saved = json.loads(self.output.read_text(encoding="utf-8"))
+        self.assertEqual(result["metrics"], metrics)
+        self.assertEqual(result["plan_metrics"], plan_metrics)
+        self.assertTrue(saved["hardware_enabled"])
+        self.assertTrue(result["release_sent"])
+        self.assertFalse(result["handover_confirmed"])
 
 
 class LiveReplayTests(unittest.TestCase):
@@ -57,14 +107,12 @@ class LiveReplayTests(unittest.TestCase):
         )
         candidate = Path(__file__).parents[1] / "examples/profiles/replay.json"
         self.profile_path.write_text(candidate.read_text(encoding="utf-8"), encoding="utf-8")
-        self.model = COLLISION_MODEL
 
     def run_replay(self, execute=False):
         return replay(
             "unused",
             self.source,
             self.profile_path,
-            self.model,
             self.output,
             side="left",
             speed_scale=0.5,
@@ -84,8 +132,6 @@ class LiveReplayTests(unittest.TestCase):
                     str(self.source),
                     "--profile",
                     str(self.profile_path),
-                    "--model",
-                    str(self.model),
                     "--output",
                     str(self.output),
                 ]

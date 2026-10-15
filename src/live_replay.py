@@ -25,11 +25,10 @@ def _baseline(q, provenance, body_q=None):
     }
 
 
-def _plan(actions, baseline, profile, model, speed_scale, side, error_prefix="离线轨迹"):
+def _plan(actions, baseline, profile, speed_scale, side, error_prefix="离线轨迹"):
     plan = create_plan(
         actions,
         baseline,
-        model,
         profile["max_target_velocity_rad_s"],
         profile["max_target_acceleration_rad_s2"],
         speed_scale=speed_scale,
@@ -41,7 +40,7 @@ def _plan(actions, baseline, profile, model, speed_scale, side, error_prefix="�
     return plan
 
 
-def _execute(interface, actions, profile, model, speed_scale, side, stop):
+def _execute(interface, actions, profile, speed_scale, side, stop):
     port = ReplaySdkPort(create_sdk(interface), time)
     try:
         if not port.wait_ready(5.0, stop):
@@ -51,7 +50,7 @@ def _execute(interface, actions, profile, model, speed_scale, side, stop):
         if state.get("body_q") is None:
             raise RuntimeError("避碰回放需要腿/腰的当前姿态反馈")
         baseline = _baseline(state["q"], "本次执行前 rt/lowstate 实测姿态", state.get("body_q"))
-        plan = _plan(actions, baseline, profile, model, speed_scale, side, error_prefix="当前姿态生成的回放计划")
+        plan = _plan(actions, baseline, profile, speed_scale, side, error_prefix="当前姿态生成的回放计划")
         print(
             "现场规划完成：{} 臂单次回放，目标序列 {:.2f} 秒；先执行接管前预检。".format(
                 side, plan["metrics"]["duration_s"]
@@ -70,7 +69,7 @@ def _execute(interface, actions, profile, model, speed_scale, side, stop):
         raise
 
 
-def replay(interface, source, profile_path, model, output, side=None, speed_scale=0.5, execute=False):
+def replay(interface, source, profile_path, output, side=None, speed_scale=0.5, execute=False):
     sources = [Path(p) for p in source] if isinstance(source, (list, tuple)) else [Path(source)]
     if not sources:
         raise ValueError("至少需要一个动作")
@@ -84,17 +83,18 @@ def replay(interface, source, profile_path, model, output, side=None, speed_scal
         raise ValueError("组合动作只能按制作时的回放侧执行")
     profile = load_replay_profile(profile_path)
     # 预览用首帧；执行只根据当前反馈规划一次，在发布命令前自动检查。
-    baseline = _baseline(actions[0]["frames"][0]["q"], "录制首帧，仅供离线预览")
-    plan = None if execute else _plan(actions, baseline, profile, model, speed_scale, side)
-    stop = Event()
+    if not execute:
+        baseline = _baseline(actions[0]["frames"][0]["q"], "录制首帧，仅供离线预览")
+        plan = _plan(actions, baseline, profile, speed_scale, side)
     # 提前独占新报告路径，避免发送指令后才发现输出文件不能创建。
     with Path(output).open("x", encoding="utf-8") as stream:
         if execute:
+            stop = Event()
             previous = {signum: signal.getsignal(signum) for signum in (signal.SIGINT, signal.SIGTERM)}
             try:
                 for signum in previous:
                     signal.signal(signum, lambda _signum, _frame: stop.set())
-                report = _execute(interface, actions, profile, model, speed_scale, side, stop)
+                report = _execute(interface, actions, profile, speed_scale, side, stop)
             except (Exception, KeyboardInterrupt) as error:
                 report = {
                     "status": "failed",
@@ -116,6 +116,7 @@ def replay(interface, source, profile_path, model, output, side=None, speed_scal
             execution_profile=profile,
         )
         dump_json(report, stream)
+    plan_metrics = report.get("plan", {}).get("metrics", {})
     return {
         "path": str(output),
         "status": report["status"],
@@ -123,13 +124,13 @@ def replay(interface, source, profile_path, model, output, side=None, speed_scal
         "qualification": report["qualification"],
         "side": side,
         "speed_scale": speed_scale,
-        "metrics": report.get("metrics", report.get("plan", {}).get("metrics", {})),
+        "metrics": report.get("metrics", plan_metrics),
         "release_sent": report.get("release_sent", False),
         "hand_release_sent": report.get("hand_release_sent", False),
         "recovery_release_sent": report.get("recovery_release_sent", False),
         "requires_operator": report.get("requires_operator", False),
         "handover_confirmed": report.get("handover_confirmed", False),
-        "plan_metrics": report.get("plan", {}).get("metrics", {}),
+        "plan_metrics": plan_metrics,
         "errors": report.get("errors", []),
         "cleanup_errors": report.get("cleanup_errors", []),
     }

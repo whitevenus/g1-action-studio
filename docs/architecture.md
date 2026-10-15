@@ -38,7 +38,7 @@ src/
 
 - `constants` 只定义一次机型、28 个手臂/手指关节的布局、50 Hz 采样周期、模式与 DDS 主题。
 - `trajectory` 提供 `finite_vector`、`interpolate_positions`、`smoothstep`、`hold_other_side`、`metrics` 和 `frame_digest`。
-  差分由 `derivatives` 统一计算；筛查复用 `joint_motion` 的结果，不再逐关节重复计算。
+  `validate_frames` 只校验时间轴和完整关节，供变速、调度和差分共用；差分由 `derivatives` 统一计算；筛查复用 `joint_motion` 的结果，不再逐关节重复计算。
 - `config.load_replay_profile` 读取一次文件，在同一份数据上检查保持增益和执行器参数。
   `config.load_teach_profile` 负责完整示教所需的手臂和手指增益；回放只校验自身所需的保持增益，不借用示教阶段。
 - `config.read_json / write_json` 统一文件读写。回放仍在创建通信之前独占报告路径，再调用 `dump_json` 写入已打开的文件。
@@ -59,7 +59,7 @@ src/
 
 ## 资源与控制边界
 
-`resources/collision/g1_arm7_dex3.xml` 同时提供关节范围与碰撞模型；手指使用官方关节和官方碰撞几何。
+`resources/collision/g1_arm7_dex3.xml` 统一提供关节范围与碰撞模型，不单独加载另一份范围文件；手指使用官方关节和官方碰撞几何。
 资源跟随 Python 包安装，不依赖运行时工作目录。
 
 手臂只写 J15–J28 和权重槽位29；手指通过左右 `rt/dex3/*/cmd` 独立发送，不写入 LowCmd 槽位。不发送腿部、导航或服务切换命令。

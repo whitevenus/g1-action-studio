@@ -1,3 +1,4 @@
+import io
 import json
 import sys
 import tempfile
@@ -6,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from g1_action_studio.author import load_action, validate_action
+from g1_action_studio.cli import main
 from g1_action_studio.config import read_json, write_json
 from g1_action_studio.constants import ARM_SLOTS, COLLISION_MODEL, JOINT_NAMES, PROFILE
 from g1_action_studio.replay import (
@@ -54,13 +56,32 @@ def fixture(folder):
 
 
 class ReplayTests(unittest.TestCase):
+    def test_cli_rejects_separate_joint_limit_model(self):
+        with patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit) as error:
+            main(
+                [
+                    "replay",
+                    "unused",
+                    "unused-action.json",
+                    "--profile",
+                    "unused-profile.json",
+                    "--output",
+                    "unused-report.json",
+                    "--model",
+                    "other.xml",
+                ]
+            )
+        self.assertEqual(error.exception.code, 2)
+
     def test_complete_schedule_returns_to_explicit_baseline_and_releases(self):
         with tempfile.TemporaryDirectory(dir=TEST_ROOT) as folder:
             action, baseline, source = fixture(folder)
             with patch.dict(sys.modules, {"unitree_sdk2py": None}):
-                result = create_plan(read_json(action), read_json(baseline), COLLISION_MODEL, 1.0, 20.0)
+                result = create_plan(read_json(action), read_json(baseline), 1.0, 20.0)
             self.assertEqual(result["status"], "offline_numerical_pass")
             self.assertFalse(result["hardware_enabled"])
+            self.assertEqual(result["model"]["file_name"], COLLISION_MODEL.name)
+            self.assertEqual(result["model"]["limits_rad"], [list(pair) for pair in load_limits(COLLISION_MODEL)])
             frames = result["frames"]
             self.assertEqual(len(frames), 801)
             self.assertEqual(frames[-1]["t"], 16.0)
@@ -113,7 +134,7 @@ class ReplayTests(unittest.TestCase):
             data["frames"][0]["q"][0] = 1
             action.write_text(json.dumps(data), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "摘要"):
-                create_plan(load_action(action), read_json(baseline), COLLISION_MODEL, 1, 20)
+                create_plan(load_action(action), read_json(baseline), 1, 20)
 
     def test_rejects_malformed_action_without_a_traceback(self):
         for data in ([], None, {"frames": None}):
@@ -147,7 +168,7 @@ class ReplayTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=TEST_ROOT) as folder:
             action, baseline, _ = fixture(folder)
             output = Path(folder) / "plan.json"
-            data = create_plan(read_json(action), read_json(baseline), COLLISION_MODEL, 0.001, 0.001)
+            data = create_plan(read_json(action), read_json(baseline), 0.001, 0.001)
             self.assertEqual(data["status"], "offline_numerical_rejected")
             self.assertTrue(data["violations"])
             write_json(data, output)

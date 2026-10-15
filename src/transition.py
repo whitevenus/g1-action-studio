@@ -72,7 +72,7 @@ def plan_transition(
         **collision,
         "waypoints": path,
         "transition_metrics": metrics(bridge) if len(bridge) >= 3 else {"duration_s": 0.0, "frame_count": 1},
-        "metrics": metrics(frames),
+        "metrics": screening["metrics"],
         "frames": frames,
         "trajectory_sha256": frame_digest(frames),
     }

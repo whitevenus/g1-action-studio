@@ -57,8 +57,8 @@ def derivatives(values: Sequence[float]) -> tuple[list[float], list[float]]:
     return velocities, accelerations
 
 
-def joint_motion(frames):
-    """校验等间隔轨迹，按关节返回位置、速度、加速度三列。"""
+def validate_frames(frames: list[Frame]) -> list[list[float]]:
+    """校验完整关节和 50 Hz 时间轴，返回数值位置，不计算未使用的差分。"""
     if not isinstance(frames, list) or len(frames) < 3:
         raise ValueError("轨迹至少需要三帧")
     if any(not isinstance(frame, dict) for frame in frames):
@@ -71,7 +71,12 @@ def joint_motion(frames):
         or any(abs((b - a) - DT) > 1e-5 for a, b in zip(times, times[1:]))
     ):
         raise ValueError("轨迹必须从 0 开始，以 50 Hz 等间隔采样")
-    return [(values, *derivatives(values)) for values in zip(*points)]
+    return points
+
+
+def joint_motion(frames):
+    """按关节返回已校验轨迹的位置、速度、加速度三列。"""
+    return [(values, *derivatives(values)) for values in zip(*validate_frames(frames))]
 
 
 def metrics(frames, motion=None):

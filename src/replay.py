@@ -4,9 +4,8 @@ import math
 import xml.etree.ElementTree as ET
 from bisect import bisect_right
 from collections.abc import Sequence
-from pathlib import Path
 
-from .constants import ARM_SLOTS, DT, JOINT_NAMES, PLAN_SCHEMA, PROFILE
+from .constants import ARM_SLOTS, COLLISION_MODEL, DT, JOINT_NAMES, PLAN_SCHEMA, PROFILE
 from .trajectory import (
     Frame,
     finite_vector,
@@ -16,6 +15,7 @@ from .trajectory import (
     joint_motion,
     metrics,
     smoothstep,
+    validate_frames,
 )
 
 
@@ -52,7 +52,7 @@ def _steps(seconds):
 
 def retime_frames(frames: list[Frame], speed_scale: float, smooth: bool = True) -> list[Frame]:
     """沿原路径调整时间；单个动作平滑两端，组合动作保留已有衔接。"""
-    joint_motion(frames)
+    validate_frames(frames)
     if type(speed_scale) not in (int, float) or not math.isfinite(speed_scale) or not 0 < speed_scale <= 1:
         raise ValueError("平均播放速度比例须在 0–1 之间且不为零")
     duration = frames[-1]["t"]
@@ -77,7 +77,7 @@ def build_schedule(
     frames, baseline, takeover=3.0, enter=5.0, return_seconds=5.0, release=2.0, enter_motion=None, return_motion=None
 ):
     """完整正常路径；返回显式基线。weight 仅是离线分析值。"""
-    joint_motion(frames)
+    validate_frames(frames)
     baseline = finite_vector(baseline)
     durations = [_steps(value) for value in (takeover, enter, return_seconds, release)]
     if frames[-1]["t"] > 540:
@@ -186,7 +186,6 @@ def screen_schedule(frames, limits, max_velocity, max_acceleration):
 def create_plan(
     data,
     baseline,
-    model_path,
     max_velocity,
     max_acceleration,
     takeover=3.0,
@@ -199,7 +198,7 @@ def create_plan(
 ):
     """离线预览和现场规划共用；现场基线由只读反馈提供。"""
     q = finite_vector(baseline["q"])
-    limits = load_limits(model_path)
+    limits = load_limits(COLLISION_MODEL)
     actions = data if isinstance(data, list) else [data]
     if not actions:
         raise ValueError("至少需要一个动作")
@@ -258,7 +257,7 @@ def create_plan(
             {"code": action["action_code"], "trajectory_sha256": action["trajectory_sha256"]} for action in actions
         ],
         "baseline": baseline,
-        "model": {"file_name": Path(model_path).name, "limits_rad": [list(pair) for pair in limits]},
+        "model": {"file_name": COLLISION_MODEL.name, "limits_rad": [list(pair) for pair in limits]},
         "thresholds": {"max_velocity_rad_s": max_velocity, "max_acceleration_rad_s2": max_acceleration},
         "phases": phases,
         "frames": frames,
