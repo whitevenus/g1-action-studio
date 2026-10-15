@@ -5,8 +5,8 @@ from bisect import bisect_right
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
-from .constants import ARM_SLOTS, DEFAULT_MODEL, DT, JOINT_NAMES, PLAN_SCHEMA, PROFILE
-from .trajectory import (finite_vector, frame_digest, hold_other_arm, interpolate_positions,
+from .constants import ARM_SLOTS, DT, JOINT_NAMES, PLAN_SCHEMA, PROFILE
+from .trajectory import (finite_vector, frame_digest, hold_other_side, interpolate_positions,
                          joint_motion, metrics, smoothstep)
 
 
@@ -179,7 +179,7 @@ def create_plan(data, baseline, model_path, max_velocity, max_acceleration,
     motions = [action["frames"] if speed_scale is None else retime_frames(
         action["frames"], speed_scale, smooth=action["kind"] == "single") for action in actions]
     if side is not None:
-        motions = [hold_other_arm(motion, q, side) for motion in motions]
+        motions = [hold_other_side(motion, q, side) for motion in motions]
     collision_model = None
     body_pose = None
     enter_motion = return_motion = None

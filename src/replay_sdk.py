@@ -1,12 +1,33 @@
 """依赖注入的 SDK 适配器；调用方必须显式提供 SDK，不导入真机库。"""
 
 import math
-from threading import Event, Lock
+from threading import Lock
 
 from .constants import (ARM_COMMAND_TOPIC, ARM_SLOTS, DT, LOWSTATE_TOPIC, WEIGHT_SLOT,
-                        HAND_MOTOR_IDS, HAND_STATE_TOPICS, HAND_COMMAND_TOPICS)
+                        HAND_MOTOR_IDS, HAND_STATE_TOPICS, HAND_COMMAND_TOPICS,
+                        EXPECTED_MODE, EXPECTED_MOTOR_MODES, JOINT_COUNT, STATE_TIMEOUT)
 from .unitree_binding import arm_snapshot, close_channels
 from .trajectory import finite_vector
+
+
+def validate_snapshot(snapshot, now, timeout=STATE_TIMEOUT) -> dict:
+    """示教与回放共用反馈检查；时钟由调用方传入。"""
+    if not isinstance(snapshot, dict):
+        raise RuntimeError("手臂或手指反馈状态缺失")
+    at = snapshot.get("at")
+    if (type(at) not in (int, float) or not math.isfinite(at)
+            or not 0 <= now - at <= timeout):
+        raise RuntimeError("手臂或手指状态超时或时间戳无效")
+    if (snapshot.get("mode_pr"), snapshot.get("mode_machine")) != EXPECTED_MODE:
+        raise RuntimeError("机器人模式已改变")
+    if tuple(snapshot.get("motor_modes", ())) != EXPECTED_MOTOR_MODES:
+        raise RuntimeError("手臂电机模式已改变")
+    for key in ("q", "dq"):
+        values = snapshot.get(key)
+        if (not isinstance(values, (tuple, list)) or len(values) != JOINT_COUNT
+                or any(type(v) not in (int, float) or not math.isfinite(v) for v in values)):
+            raise RuntimeError("手臂或手指关节状态无效")
+    return snapshot
 
 
 class ReplaySdkPort:
@@ -16,7 +37,6 @@ class ReplaySdkPort:
         self.lock = Lock()
         self.latest = None
         self.commands = 0
-        self.ready = Event()
         self.hand_states: dict[str, dict | None] = {side: None for side in HAND_MOTOR_IDS}
         self.hand_resources = []
         self.hand_publishers = {}
@@ -48,8 +68,6 @@ class ReplaySdkPort:
             state = None
         with self.lock:
             self.latest = state
-        if self.snapshot() is not None:
-            self.ready.set()
 
     def _on_hand(self, side, message):
         try:
@@ -64,8 +82,6 @@ class ReplaySdkPort:
             state = None
         with self.lock:
             self.hand_states[side] = state
-        if self.snapshot() is not None:
-            self.ready.set()
 
     def _on_command(self, _message):
         with self.lock:

@@ -39,7 +39,7 @@ class ActionFixtures:
 
     def write_recording(self, path, q, seconds=1.0, synthetic=False):
         data = {"schema": "g1-arm7-dex3-state-recording-v1", "target_profile": PROFILE,
-                "arm_slots": list(ARM_SLOTS), "joint_names": list(JOINT_NAMES), "invalid_messages": 0,
+                "arm_slots": list(ARM_SLOTS), "joint_names": list(JOINT_NAMES),
                 "samples": [{"t": round(i * 0.02, 6), "q": list(q), "dq": [0.0] * 28,
                              "mode_pr": 0, "mode_machine": 5} for i in range(round(seconds / 0.02) + 1)]}
         if synthetic:
@@ -49,9 +49,8 @@ class ActionFixtures:
     def execute(self, source, q=None, **kwargs):
         clock = VirtualClock()
         sdk = SimulatedSDK(clock, self.q if q is None else q)
-        with patch("g1_action_studio.live_replay._make_sdk", return_value=sdk), \
+        with patch("g1_action_studio.live_replay.create_sdk", return_value=sdk), \
                 patch("g1_action_studio.live_replay.time", clock), \
-                patch("g1_action_studio.teach.time", clock), \
                 contextlib.redirect_stdout(io.StringIO()):
             result = replay("unused", source, self.profile, DEFAULT_MODEL, self.output,
                             speed_scale=1.0, execute=True, **kwargs)
@@ -92,7 +91,7 @@ class ActionFlowTests(ActionFixtures, unittest.TestCase):
         self.write_recording(source, self.q, synthetic=True)
         action = self.root / "synthetic-action.json"
         write_json(load_action(source), action)
-        with patch("g1_action_studio.live_replay._make_sdk") as factory:
+        with patch("g1_action_studio.live_replay.create_sdk") as factory:
             with self.assertRaisesRegex(ValueError, "合成示例"):
                 replay("unused", action, self.profile, DEFAULT_MODEL, self.output, execute=True)
             factory.assert_not_called()
@@ -142,7 +141,7 @@ class CombinedFlowTests(ActionFixtures, unittest.TestCase):
 
     def test_wrong_side_cannot_initialize_network(self):
         action = self.combined()
-        with patch("g1_action_studio.live_replay._make_sdk") as factory:
+        with patch("g1_action_studio.live_replay.create_sdk") as factory:
             with self.assertRaisesRegex(ValueError, "回放侧"):
                 replay("unused", action, self.profile, DEFAULT_MODEL, self.output, side="right", execute=True)
             factory.assert_not_called()
@@ -186,9 +185,8 @@ class CombinedFlowTests(ActionFixtures, unittest.TestCase):
             if sdk.publisher_started and clock.now > 4.0:
                 sdk.body_q[0] = 0.03
         sdk.before_step = move_body
-        with patch("g1_action_studio.live_replay._make_sdk", return_value=sdk), \
+        with patch("g1_action_studio.live_replay.create_sdk", return_value=sdk), \
                 patch("g1_action_studio.live_replay.time", clock), \
-                patch("g1_action_studio.teach.time", clock), \
                 contextlib.redirect_stdout(io.StringIO()):
             result = replay("unused", action, self.profile, DEFAULT_MODEL, self.output, execute=True)
         report = json.loads(self.output.read_text(encoding="utf-8"))

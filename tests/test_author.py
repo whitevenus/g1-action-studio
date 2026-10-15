@@ -25,7 +25,7 @@ def source_file(path, *, gap=False, changed_mode=False):
                      "mode_pr": 0})
     payload = {"schema": "g1-arm7-dex3-state-recording-v1",
                "target_profile": PROFILE, "arm_slots": list(ARM_SLOTS), "joint_names": list(JOINT_NAMES),
-               "invalid_messages": 0, "samples": rows}
+               "samples": rows}
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 

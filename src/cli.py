@@ -18,13 +18,8 @@ def main(argv=None):
     teach = commands.add_parser("teach", help="Arm7 手把手示教候选；默认只检查参数")
     teach.add_argument("interface", help="DDS 网卡，例如 eth0")
     teach.add_argument("--side", choices=("left", "right"), required=True)
-    teach.add_argument("--seconds", type=int, default=3, help="hold 的保持时长；record 用回车开始和结束")
-    teach.add_argument("--takeover-seconds", type=float, default=3.0, help="手臂权重从0到1的接管时长，默认3秒")
-    teach.add_argument("--soften-seconds", type=float, default=3.0, help="示教侧手臂和手指降低刚度的时长，默认3秒")
     teach.add_argument("--output", required=True)
-    teach.add_argument("--profile", required=True, help="本机候选/验收参数 JSON；hold 只需保持增益")
-    teach.add_argument("--stage", choices=("hold", "soften", "record"), default="record",
-                       help="默认回车控制示教录制；hold/soften 用于单独调试")
+    teach.add_argument("--profile", required=True, help="手臂和手指的保持/示教增益 JSON")
     teach.add_argument("--execute", action="store_true", help="显式开启真机控制与录制")
 
     check = commands.add_parser("preflight", help="只读保存运控与状态消息观测报告")
@@ -66,9 +61,7 @@ def main(argv=None):
     try:
         if args.command == "teach":
             from .teach import teach
-            summary = teach(args.interface, args.side, args.seconds,
-                            args.output, args.profile, args.execute, args.stage,
-                            takeover_seconds=args.takeover_seconds, soften_seconds=args.soften_seconds)
+            summary = teach(args.interface, args.side, args.output, args.profile, args.execute)
         elif args.command == "preflight":
             from .preflight import preflight
             summary = preflight(args.interface, args.seconds, args.output)

@@ -5,21 +5,13 @@ import time
 from pathlib import Path
 from threading import Event
 
-from .constants import ARM_SLOTS, EXPECTED_MOTOR_MODES, PROFILE
+from .constants import ARM_SLOTS, PROFILE
 from .author import load_action
 from .executor import execute_replay
 from .config import dump_json, load_replay_profile
 from .replay import create_plan
-from .replay_sdk import ReplaySdkPort
-from .teach import validate_snapshot
-
-
-def _make_sdk(interface):
-    from .unitree_binding import UnitreeReplaySDK
-    sdk = UnitreeReplaySDK()
-    sdk.initialize_network(interface, allow_network=True)
-    sdk.initialize_service_clients()
-    return sdk
+from .replay_sdk import ReplaySdkPort, validate_snapshot
+from .unitree_binding import create_sdk
 
 
 def _baseline(q, provenance, body_q=None):
@@ -40,11 +32,11 @@ def _plan(action, baseline, profile, model, speed_scale, side, error_prefix="离
 
 
 def _execute(interface, action, profile, model, speed_scale, side, stop):
-    port = ReplaySdkPort(_make_sdk(interface), time)
+    port = ReplaySdkPort(create_sdk(interface), time)
     try:
         if not port.wait_ready(5.0, stop):
             raise RuntimeError("等待初始状态超时或操作员已请求停止")
-        state = validate_snapshot(port.snapshot(), EXPECTED_MOTOR_MODES)
+        state = validate_snapshot(port.snapshot(), time.monotonic())
         # 接管和最终回位均使用本次反馈，另一侧全程保持此位置。
         if state.get("body_q") is None:
             raise RuntimeError("避碰回放需要腿/腰的当前姿态反馈")

@@ -81,37 +81,33 @@ uv run g1-action-studio preflight eth0 --seconds 10 --output data/preflight-001.
 
 ### 2. 准备本机参数
 
-复制 `examples/profiles/hold.json`、`soften.json`、`replay.json` 后独立填写/验收。公共示例不是通用安全参数。先核对设备型号、固件、末端负载、起始姿态及控制交接方式，并由现场操作员安排机体保护、净空和遥控器接管。
+复制 `examples/profiles/teach.json`、`replay.json` 后独立填写/验收。公共示例不是通用安全参数。先核对设备型号、固件、末端负载、起始姿态及控制交接方式，并由现场操作员安排机体保护、净空和遥控器接管。
 
 手臂保持使用 `hold_kp/hold_kd`，手指保持使用独立的 `hand_hold_kp/hand_hold_kd`；示教还需要 `teach_kp/teach_kd` 和 `hand_teach_kp/hand_teach_kd`。手指示教允许 `hand_teach_kp=0`，阻尼必须为正。回放另有跟踪误差、回位稳定和状态时效参数。示教默认不按速度或起始位置偏移中止；回放的这两项是可选检查，公共示例未设置。数值和模式检查仍保留，异常时不能保证自动释放成功。
 
 ### 3. 回车控制示教录制
 
-机器人由你切到 `ai / 501` 并保持稳定站立，程序保存此时的双臂位置。SDK 权重从 0 渐变到 1 后，降低示教侧刚度；另一侧保持本次初始位置。
+机器人由你切到 `ai / 501` 并保持稳定站立，程序保存此时的双臂和双手姿态。手臂权重用2秒从0渐变到1，再用2秒降低示教侧手臂和手指的刚度与阻尼；另一侧保持本次初始姿态。两个时长统一定义在 `src/constants.py` 的 `TEACH_TAKEOVER_SECONDS`、`TEACH_SOFTEN_SECONDS` 中。
 
 ```bash
 uv run --extra planning g1-action-studio teach eth0 --side left \
-  --profile data/my-soften-profile.json --output data/recording-001.json --execute
+  --profile data/my-teach-profile.json --output data/recording-001.json --execute
 ```
 
-默认 `--stage record`，不需要填写录制秒数。先托住手臂并摆到动作起点，按回车开始；完成动作后再按回车结束。
+`teach` 只提供完整示教流程，不填写阶段或录制秒数。接管和降低刚度后，托住手臂并摆好手臂与手指的动作起点，按回车开始；完成动作后再按回车结束。
 等待回车期间也持续发送低刚度跟随命令。`left` 是机器人自身的左臂；没有显式重力补偿，低刚度不能保证松手后不下沉。
 
-结束后冻结终点目标，渐变恢复保持刚度；规划回位期间持续保持终点，再沿避碰路径回到程序启动时的双臂位置。
+结束后冻结终点目标，渐变恢复保持刚度；规划回位期间持续保持终点，再沿避碰路径回到程序启动时的双臂和双手姿态。
 确认实测位置和速度稳定后，权重从 1 渐变到 0。准备、恢复增益、回位与释放均不写进动作录制。
 回位规划失败、反馈失效或取消时，不在终点主动释放；停止自动流程并提示现场接管。停止发布不能保证官方控制器继续保持该姿态。
 
-`--stage hold --seconds 3` 和 `--stage soften` 仍可用于单独调试。去掉 `--execute` 只核对参数，不连接设备。
+去掉 `--execute` 只核对参数，不连接设备。示教参数示例统一为 `examples/profiles/teach.json`；手臂和手指分别配置保持与示教增益。
 
-`--takeover-seconds` 设置手臂权重从0到1的接管时间，`--soften-seconds` 设置示教侧手臂和手指降低刚度的时间，均默认3秒，支持0.02–30秒的小数。例如单独调试：
-
-```bash
-uv run g1-action-studio teach eth0 --side left --stage soften \
-  --takeover-seconds 5 --soften-seconds 8 \
-  --profile data/my-soften-profile.json --output data/soften-trial.json --execute
+```text
+读取初始姿态 → 2秒接管 → 2秒降低刚度
+→ 摆好起点，回车开始 → 完成动作，回车结束
+→ 保持终点、恢复刚度 → 避碰回位 → 确认稳定 → 释放手臂权重
 ```
-
-`hold` 只执行接管和保持，`soften` 执行到降低刚度后收尾；默认 `record` 继续等待回车录制。这三个阶段共用同一套控制循环。`--seconds` 仍只决定 `hold` 的保持时长，不决定接管、降低刚度或录制时长。
 
 ### 4. 直接回放或可选整理
 

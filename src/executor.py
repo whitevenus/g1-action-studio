@@ -3,11 +3,12 @@
 import math
 
 from .constants import (
-    JOINT_COUNT, JOINT_NAMES, ARM_SLOTS, DT, EXPECTED_MODE, EXPECTED_MOTOR_MODES, PLAN_SCHEMA, PROFILE,
+    JOINT_COUNT, JOINT_NAMES, ARM_SLOTS, DT, PLAN_SCHEMA, PROFILE,
 )
 from .config import validate_replay_profile
 from .trajectory import frame_digest
 from .replay import sample_schedule, screen_schedule
+from .replay_sdk import validate_snapshot
 
 
 class Cancelled(RuntimeError):
@@ -81,33 +82,19 @@ def execute_replay(plan, profile, port_factory, clock, stop):
 
     def feedback():
         nonlocal last_state_at
-        state = port.snapshot()
-        if not isinstance(state, dict):
-            raise RuntimeError("状态缺失")
-        at = state.get("at")
-        now = clock.monotonic()
-        if (type(at) not in (int, float) or not math.isfinite(at)
-                or not 0 <= now - at <= profile["state_timeout_s"]
-                or (last_state_at is not None and at < last_state_at)):
-            raise RuntimeError("状态超时或时间戳无效")
-        if (state.get("mode_pr"), state.get("mode_machine")) != EXPECTED_MODE:
-            raise RuntimeError("机器人模式已改变")
-        if tuple(state.get("motor_modes", ())) != EXPECTED_MOTOR_MODES:
-            raise RuntimeError("手臂电机模式不符合条件")
-        for key in ("q", "dq"):
-            values = state.get(key)
-            if (not isinstance(values, (tuple, list)) or len(values) != JOINT_COUNT
-                    or any(type(x) not in (int, float) or not math.isfinite(x) for x in values)):
-                raise RuntimeError("关节状态无效")
+        state = validate_snapshot(port.snapshot(), clock.monotonic(), profile["state_timeout_s"])
+        at = state["at"]
+        if last_state_at is not None and at < last_state_at:
+            raise RuntimeError("状态时间戳倒退")
         if any(q < low or q > high for q, (low, high) in zip(state["q"], limits)):
             raise RuntimeError("反馈角度超出模型范围")
         if plan.get("body_pose") is not None:
             body = state.get("body_q")
             if (not isinstance(body, (tuple, list)) or len(body) != ARM_SLOTS[0]
                     or any(type(v) not in (int, float) or not math.isfinite(v) for v in body)):
-                raise RuntimeError("组合动作缺少有效的腿/腰姿态反馈")
+                raise RuntimeError("缺少有效的腿/腰姿态反馈")
             if max(abs(a - b) for a, b in zip(body, plan["body_pose"])) > 0.02:
-                raise RuntimeError("腿/腰姿态已偏离本次碰撞规划；停止组合动作")
+                raise RuntimeError("腿/腰姿态已偏离本次碰撞规划；停止回放")
         if "max_speed_rad_s" in profile and max(map(abs, state["dq"])) > profile["max_speed_rad_s"]:
             raise RuntimeError("反馈速度超限")
         if "max_offset_rad" in profile and max(abs(q - initial) for q, initial in zip(state["q"], baseline)) > profile["max_offset_rad"]:
@@ -169,7 +156,7 @@ def execute_replay(plan, profile, port_factory, clock, stop):
         if max(abs(a - b) for a, b in zip(state["q"], baseline)) > profile["initial_pose_tolerance_rad"]:
             raise RuntimeError("当前姿态与规划基线不匹配；须重新规划")
         if max(map(abs, state["dq"])) > profile["return_speed_rad_s"]:
-            raise RuntimeError("初始手臂尚未静止")
+            raise RuntimeError("初始手臂或手指尚未静止")
         # 只读观察；零条命令仍不能证明独占控制权。
         observe_started = clock.monotonic()
         while clock.monotonic() - observe_started < 3 - 1e-9:
@@ -178,13 +165,13 @@ def execute_replay(plan, profile, port_factory, clock, stop):
             feedback()
             clock.sleep(DT)
         if port.observed_commands():
-            raise RuntimeError("观测到其他手臂命令")
+            raise RuntimeError("观测到其他手臂或手指命令")
         port.check_services()
         state = feedback()
         if max(abs(a - b) for a, b in zip(state["q"], baseline)) > profile["initial_pose_tolerance_rad"]:
             raise RuntimeError("接管前姿态已偏离基线")
         if max(map(abs, state["dq"])) > profile["return_speed_rad_s"]:
-            raise RuntimeError("接管前手臂尚未静止")
+            raise RuntimeError("接管前手臂或手指尚未静止")
         port.hand_profile = profile
         port.start_publisher()
         stage = "playback"

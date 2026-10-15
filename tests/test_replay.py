@@ -1,4 +1,4 @@
-from g1_action_studio.constants import JOINT_NAMES
+from g1_action_studio.constants import JOINT_NAMES, DEFAULT_MODEL
 import json
 import sys
 import tempfile
@@ -11,7 +11,7 @@ from g1_action_studio.trajectory import frame_digest
 from g1_action_studio.config import read_json, write_json
 from g1_action_studio.author import load_action, validate_action
 from g1_action_studio.replay import (
-    DEFAULT_MODEL, build_schedule, load_limits, create_plan,
+    build_schedule, load_limits, create_plan,
     sample_schedule, screen_schedule,
 )
 

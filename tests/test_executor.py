@@ -9,7 +9,8 @@ from unittest.mock import Mock, patch
 from g1_action_studio import ARM_SLOTS, PROFILE
 from g1_action_studio.trajectory import frame_digest
 from g1_action_studio.executor import execute_replay
-from g1_action_studio.replay import DEFAULT_MODEL, build_schedule, load_limits
+from g1_action_studio.constants import DEFAULT_MODEL
+from g1_action_studio.replay import build_schedule, load_limits
 from g1_action_studio.replay_sdk import ReplaySdkPort
 from fake_sdk import SIMULATION_PROFILE, SimulatedSDK, VirtualClock, simulate_replay
 

@@ -135,3 +135,11 @@ class UnitreeReplaySDK:
             raise RuntimeError("未初始化服务查询客户端")
         loco, switcher, robot_state = self.service_clients
         return read_control_state(loco, switcher), read_arm_service(robot_state)
+
+
+def create_sdk(interface):
+    """示教与回放共用的显式真机连接入口；调用前由上层确认 execute。"""
+    sdk = UnitreeReplaySDK()
+    sdk.initialize_network(interface, allow_network=True)
+    sdk.initialize_service_clients()
+    return sdk

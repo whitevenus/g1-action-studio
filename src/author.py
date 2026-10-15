@@ -74,8 +74,6 @@ def load_action(source, start=None, end=None, code="recorded.action", version=1,
     rows = data.get("samples")
     if not isinstance(rows, list) or len(rows) < 3:
         raise ValueError("至少需要三帧状态")
-    if data.get("invalid_messages", 0) != 0:
-        raise ValueError("原始记录含无效帧，请先调查数据质量")
     if not CODE_PATTERN.fullmatch(code) or len(code) > 120:
         raise ValueError("动作代码只能使用小写字母、数字、点和下划线")
     name = source.stem if name is None else name.strip()

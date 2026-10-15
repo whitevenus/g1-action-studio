@@ -31,7 +31,7 @@ def smoothstep(ratio):
     return ratio ** 3 * (10 + ratio * (-15 + 6 * ratio))
 
 
-def hold_other_arm(frames, baseline, side):
+def hold_other_side(frames, baseline, side):
     """只保留选中侧的动作，另一侧统一使用基线位置。"""
     selected = SIDE_OFFSETS[side]
     return [{"t": frame["t"], "q": [value if i in selected else baseline[i]

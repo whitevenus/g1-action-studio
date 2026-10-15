@@ -35,4 +35,4 @@ include-package-data = false
 license-files = ["LICENSE", "LICENSE-UNITREE", "LICENSE-UNITREE-MODEL", "LICENSE-APACHE-2.0"]
 
 [tool.setuptools.package-data]
-g1_action_studio = ["resources/*.xml", "resources/collision/*.xml", "resources/collision/*.json", "resources/collision/meshes/*.STL"]
+g1_action_studio = ["resources/collision/*.xml", "resources/collision/*.json", "resources/collision/meshes/*.STL"]

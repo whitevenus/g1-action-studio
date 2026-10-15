@@ -1,4 +1,4 @@
-"""机型、关节布局与采样约定；不包含设备连接或运行时参数。"""
+"""机型、关节布局、采样约定、固定示教时序与资源路径。"""
 
 from pathlib import Path
 
@@ -29,6 +29,8 @@ HAND_STATE_TOPICS = {side: f"rt/dex3/{side}/state" for side in HAND_MOTOR_IDS}
 HAND_COMMAND_TOPICS = {side: f"rt/dex3/{side}/cmd" for side in HAND_MOTOR_IDS}
 
 DT = 0.02  # 50 Hz。
+TEACH_TAKEOVER_SECONDS = 2.0  # 保持初始姿态，手臂权重从0渐变到1。
+TEACH_SOFTEN_SECONDS = 2.0  # 示教侧手臂和手指从保持增益渐变到示教增益。
 STATE_TIMEOUT = 0.25
 EXPECTED_MODE = (0, 5)  # mode_pr、mode_machine。
 EXPECTED_MOTOR_MODES = (1,) * ARM_JOINT_COUNT

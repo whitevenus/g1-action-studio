@@ -44,7 +44,7 @@ class LiveReplayTests(unittest.TestCase):
             "target_profile": PROFILE, "arm_slots": list(ARM_SLOTS), "joint_names": list(JOINT_NAMES), "samples": samples}), encoding="utf-8")
         candidate = Path(__file__).parents[1] / "examples/profiles/replay.json"
         self.profile_path.write_text(candidate.read_text(encoding="utf-8"), encoding="utf-8")
-        from g1_action_studio.replay import DEFAULT_MODEL
+        from g1_action_studio.constants import DEFAULT_MODEL
         self.model = DEFAULT_MODEL
 
     def run_replay(self, execute=False):
@@ -53,7 +53,7 @@ class LiveReplayTests(unittest.TestCase):
 
     def test_preview_and_cli_do_not_import_sdk_or_initialize_network(self):
         with patch.dict(sys.modules, {"unitree_sdk2py": None}), \
-                patch("g1_action_studio.live_replay._make_sdk") as factory, \
+                patch("g1_action_studio.live_replay.create_sdk") as factory, \
                 contextlib.redirect_stdout(io.StringIO()):
             code = main(["replay", "unused", str(self.source), "--profile", str(self.profile_path),
                          "--model", str(self.model), "--output", str(self.output)])
@@ -67,8 +67,7 @@ class LiveReplayTests(unittest.TestCase):
     def test_execute_uses_fresh_baseline_holds_other_arm_and_returns_before_release(self):
         clock = VirtualClock()
         sdk = SimulatedSDK(clock, self.initial)
-        with patch("g1_action_studio.live_replay._make_sdk", return_value=sdk), \
-                patch("g1_action_studio.teach.time", clock), \
+        with patch("g1_action_studio.live_replay.create_sdk", return_value=sdk), \
                 patch("g1_action_studio.live_replay.time", clock):
             result = self.run_replay(execute=True)
         self.assertEqual(result["status"], "completed")
@@ -110,7 +109,7 @@ class LiveReplayTests(unittest.TestCase):
 
     def test_existing_report_blocks_network_initialization(self):
         self.output.write_text("existing", encoding="utf-8")
-        with patch("g1_action_studio.live_replay._make_sdk") as factory:
+        with patch("g1_action_studio.live_replay.create_sdk") as factory:
             with self.assertRaises(FileExistsError):
                 self.run_replay(execute=True)
             factory.assert_not_called()
@@ -120,7 +119,7 @@ class LiveReplayTests(unittest.TestCase):
         data = json.loads(self.source.read_text(encoding="utf-8"))
         data["qualification"] = "synthetic_example_not_for_hardware"
         self.source.write_text(json.dumps(data), encoding="utf-8")
-        with patch("g1_action_studio.live_replay._make_sdk") as factory:
+        with patch("g1_action_studio.live_replay.create_sdk") as factory:
             with self.assertRaisesRegex(ValueError, "合成示例"):
                 self.run_replay(execute=True)
             factory.assert_not_called()
@@ -128,8 +127,7 @@ class LiveReplayTests(unittest.TestCase):
     def test_live_baseline_outside_model_closes_without_creating_publisher(self):
         clock = VirtualClock()
         sdk = SimulatedSDK(clock, [4.0] * 28)
-        with patch("g1_action_studio.live_replay._make_sdk", return_value=sdk), \
-                patch("g1_action_studio.teach.time", clock), \
+        with patch("g1_action_studio.live_replay.create_sdk", return_value=sdk), \
                 patch("g1_action_studio.live_replay.time", clock):
             result = self.run_replay(execute=True)
         self.assertEqual(result["status"], "failed")
@@ -144,8 +142,7 @@ class LiveReplayTests(unittest.TestCase):
             if clock.now > 7:
                 handlers[signal.SIGINT](signal.SIGINT, None)
         sdk.before_step = cancel
-        with patch("g1_action_studio.live_replay._make_sdk", return_value=sdk), \
-                patch("g1_action_studio.teach.time", clock), \
+        with patch("g1_action_studio.live_replay.create_sdk", return_value=sdk), \
                 patch("g1_action_studio.live_replay.time", clock), \
                 patch("g1_action_studio.live_replay.signal.getsignal", return_value="previous"), \
                 patch("g1_action_studio.live_replay.signal.signal", handlers.__setitem__):

@@ -6,7 +6,7 @@ from pathlib import Path
 from .constants import SIDE_OFFSETS, ARM_SLOTS, COLLISION_MODEL, ACTION_SCHEMA, DT, PROFILE, JOINT_NAMES
 from .author import load_action
 from .config import write_json
-from .trajectory import frame_digest, hold_other_arm, metrics
+from .trajectory import frame_digest, hold_other_side, metrics
 from .collision import CollisionModel, find_path, parameterize_path
 from .replay import retime_frames, screen_schedule
 
@@ -25,8 +25,8 @@ def plan_transition(before, after, output, side='left', speed_scale=1.0,
     baseline = first[0]['q']
     if side not in SIDE_OFFSETS:
         raise ValueError('side 须为 left/right；避碰余量须为 0.001–0.10 米')
-    first = hold_other_arm(first, baseline, side)
-    second = hold_other_arm(second, baseline, side)
+    first = hold_other_side(first, baseline, side)
+    second = hold_other_side(second, baseline, side)
     path = find_path(model, first[-1]['q'], second[0]['q'], side, margin)
     bridge = parameterize_path(path, max_velocity, max_acceleration)
     frames = []

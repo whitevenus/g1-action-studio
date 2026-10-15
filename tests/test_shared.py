@@ -9,7 +9,7 @@ from unittest.mock import patch
 from g1_action_studio.constants import DT
 from g1_action_studio.config import dump_json, load_replay_profile, write_json
 from g1_action_studio.replay import screen_schedule
-from g1_action_studio.trajectory import hold_other_arm, joint_motion, metrics
+from g1_action_studio.trajectory import hold_other_side, joint_motion, metrics
 
 
 class SharedBehaviorTests(unittest.TestCase):
@@ -30,8 +30,8 @@ class SharedBehaviorTests(unittest.TestCase):
         frames = [{"t": 0.0, "q": [0.1] * 28}, {"t": DT, "q": [0.2] * 28}]
         original = json.loads(json.dumps(frames))
         baseline = [0.3] * 7 + [0.4] * 7 + [0.5] * 7 + [0.6] * 7
-        left = hold_other_arm(frames, baseline, "left")
-        right = hold_other_arm(frames, baseline, "right")
+        left = hold_other_side(frames, baseline, "left")
+        right = hold_other_side(frames, baseline, "right")
         self.assertEqual(left[1]["q"], [0.2] * 7 + [0.4] * 7 + [0.2] * 7 + [0.6] * 7)
         self.assertEqual(right[1]["q"], [0.3] * 7 + [0.2] * 7 + [0.5] * 7 + [0.2] * 7)
         self.assertEqual(frames, original)

@@ -7,7 +7,7 @@
 ```text
 src/
   cli.py             日常命令入口
-  constants.py       机型、关节布局、采样周期、协议格式与资源路径
+  constants.py       机型、关节布局、采样周期、示教渐变时长与资源路径
   trajectory.py      位置校验、插值、差分、统计与轨迹摘要
   config.py          示教/回放参数校验、JSON 读写和禁止覆盖
   preflight.py       只读预检
@@ -16,7 +16,7 @@ src/
   replay.py          回放规划、时间插值和数值检查
   live_replay.py     离线预览或显式真机回放
   executor.py        反馈检查、回位等待、取消和异常释放
-  replay_sdk.py      回放执行器的 DDS 读写接口
+  replay_sdk.py      示教/回放共用的反馈检查与 DDS 读写接口
   unitree_binding.py 官方 SDK 绑定、服务查询、反馈快照与通道清理
   collision.py       MuJoCo 碰撞、OMPL RRTConnect 与路径平滑
   transition.py      衔接动作，保存可回放的统一动作
@@ -27,7 +27,7 @@ src/
 
 - 预览：`cli → live_replay → author / replay`，不加载真机 SDK。
 - 真机回放：`cli → live_replay → executor → replay_sdk → unitree_binding`。
-- 示教：`cli → teach`，`SdkArmPort` 负责 DDS 通信。
+- 示教：`cli → teach → replay_sdk → unitree_binding`，与回放共用通信端口。
 - 离线过渡：`cli → transition → collision`，只加载可选的 MuJoCo。
 - 回归测试：`tests/fake_sdk → executor / replay_sdk`，用内存消息与虚拟时钟检查正常和故障流程。
 
@@ -37,10 +37,10 @@ src/
 ## 公共实现怎样复用
 
 - `constants` 只定义一次机型、28 个手臂/手指关节的布局、50 Hz 采样周期、模式与 DDS 主题。
-- `trajectory` 提供 `finite_vector`、`interpolate_positions`、`smoothstep`、`hold_other_arm`、`metrics` 和 `frame_digest`。
+- `trajectory` 提供 `finite_vector`、`interpolate_positions`、`smoothstep`、`hold_other_side`、`metrics` 和 `frame_digest`。
   差分由 `derivatives` 统一计算；筛查复用 `joint_motion` 的结果，不再逐关节重复计算。
 - `config.load_replay_profile` 读取一次文件，在同一份数据上检查保持增益和执行器参数。
-  `config.load_teach_profile` 负责示教阶段所需增益。
+  `config.load_teach_profile` 负责完整示教所需的手臂和手指增益；回放只校验自身所需的保持增益，不借用示教阶段。
 - `config.read_json / write_json` 统一文件读写。回放仍在创建通信之前独占报告路径，再调用 `dump_json` 写入已打开的文件。
 - `unitree_binding` 的公共函数由预检、示教和回放共同使用；这些函数只有在实际调用时才导入或创建 SDK 通信。
 
@@ -68,6 +68,8 @@ src/
 `transition` 输出 `g1-arm7-dex3-action-v1`，单个动作也是这个格式。回放使用本次实测腿/腰姿态检查整段路径，并监控其变化。模型假设与检查方法见[避碰衔接](transitions.md)。
 测试使用合成状态与替身端口，默认测试不连接机器人。开发验证命令、旧格式兼容与独立 `audit` 已删除，必要检查在实际调用处自动执行。
 
-示教的 `hold/soften/record` 共用 `run_session` 的初始化、`tick` 控制周期和 `ramp` 渐变。接管和降低刚度时长分别由 `--takeover-seconds`、`--soften-seconds` 设置。输入线程只产生回车事件；主控制循环持续发送指令。结束时冻结终点、恢复增益，再将纯几何回位规划交给工作线程；等待规划期间继续保持终点，回位稳定后才释放。
+示教只保留 `teach → run_session` 的完整流程。`constants.py` 的 `TEACH_TAKEOVER_SECONDS`、`TEACH_SOFTEN_SECONDS` 均为2秒。输入线程只产生回车事件；主控制循环持续发送指令。结束时冻结终点、恢复增益，再将纯几何回位规划交给工作线程；等待规划期间继续保持终点，回位稳定后才释放。异常时停止自动流程并清理通信，不能在终点盲目释放。
+
+`replay_sdk.validate_snapshot` 统一检查反馈时效、运控/电机模式、28关节数量和有限数值。回放额外保留时间戳倒退、关节范围、跟踪误差等执行检查。`unitree_binding.create_sdk` 统一显式初始化 SDK 网络与服务客户端；示教和回放都在 `--execute` 后调用。
 
 `find_path` 将选中侧的7个手臂关节和7个手指关节接入 OMPL，另一侧固定。OMPL 负责搜索和路点简化，`MotionValidator` 复用原来的 MuJoCo 区间检查；不再维护手写随机树。
