@@ -103,6 +103,16 @@ uv run --extra planning g1-action-studio teach eth0 --side left \
 
 `--stage hold --seconds 3` 和 `--stage soften` 仍可用于单独调试。去掉 `--execute` 只核对参数，不连接设备。
 
+`--takeover-seconds` 设置手臂权重从0到1的接管时间，`--soften-seconds` 设置示教侧手臂和手指降低刚度的时间，均默认3秒，支持0.02–30秒的小数。例如单独调试：
+
+```bash
+uv run g1-action-studio teach eth0 --side left --stage soften \
+  --takeover-seconds 5 --soften-seconds 8 \
+  --profile data/my-soften-profile.json --output data/soften-trial.json --execute
+```
+
+`hold` 只执行接管和保持，`soften` 执行到降低刚度后收尾；默认 `record` 继续等待回车录制。这三个阶段共用同一套控制循环。`--seconds` 仍只决定 `hold` 的保持时长，不决定接管、降低刚度或录制时长。
+
 ### 4. 直接回放或可选整理
 
 `teach` 保存 `g1-arm7-dex3-state-recording-v1` 示教录制文件，可直接回放，无需先 `build`。

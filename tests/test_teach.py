@@ -66,7 +66,8 @@ class FakePort:
 
     def write(self, positions, hold_kp, hold_kd, teach_kp, teach_kd, side, weight, hand_kp=None, hand_kd=None):
         self.writes.append({"q": tuple(positions), "kp": teach_kp,
-                            "kd": teach_kd, "weight": weight})
+                            "kd": teach_kd, "weight": weight, "t": self.clock.now,
+                            "hand_kp": hand_kp, "hand_kd": hand_kd})
         if len(self.writes) == self.fail_write:
             raise RuntimeError("模拟发送失败，可能已送达")
 
@@ -95,9 +96,28 @@ class TeachLifecycleTests(unittest.TestCase):
         self.writer = self.stack.enter_context(patch.object(Path, "open"))
         self.writer.return_value.__enter__.return_value = self.output
 
-    def run_teach(self, stage="hold", side="left"):
+    def run_teach(self, stage="hold", side="left", **timing):
         return teach("unused-offline", side, 1, "unused.json", "unused-profile.json",
-                     execute=True, target_stage=stage)
+                     execute=True, target_stage=stage, **timing)
+
+    def test_custom_takeover_and_softening_durations_include_finger_gains(self):
+        self.run_teach("soften", takeover_seconds=0.2, soften_seconds=0.4)
+        takeover, soften = self.port.writes[:11], self.port.writes[11:32]
+        self.assertEqual(len(self.port.writes), 11 + 21 + 101)
+        self.assertAlmostEqual(takeover[-1]["t"] - takeover[0]["t"], 0.2)
+        self.assertAlmostEqual(soften[-1]["t"] - soften[0]["t"], 0.4)
+        self.assertEqual([takeover[0]["weight"], takeover[-1]["weight"]], [0, 1])
+        self.assertTrue(all(w["weight"] == 1 for w in soften))
+        self.assertEqual([soften[0]["kp"], soften[-1]["kp"]], [12, 2])
+        self.assertEqual([soften[0]["hand_kp"], soften[-1]["hand_kp"]], [1.5, 0])
+        self.assertAlmostEqual(soften[-1]["hand_kd"], .05)
+        self.assertEqual(self.port.writes[-1]["hand_kp"], 1.5)
+        self.assertEqual(self.port.writes[-1]["weight"], 0)
+
+    def test_hold_uses_custom_takeover_but_does_not_soften(self):
+        self.run_teach("hold", takeover_seconds=0.2, soften_seconds=0.4)
+        self.assertEqual(len(self.port.writes), 11 + 51 + 101)
+        self.assertTrue(all(w["kp"] == 12 and w["hand_kp"] == 1.5 for w in self.port.writes))
 
     def test_hold_and_release_targets_are_frozen_despite_measured_drift(self):
         result = self.run_teach()
@@ -291,6 +311,25 @@ class PortCleanupTests(unittest.TestCase):
 
 
 class TeachTests(unittest.TestCase):
+    def test_invalid_durations_fail_before_connecting(self):
+        for name in ("takeover_seconds", "soften_seconds"):
+            for value in (0, -1, .001, 31, float("nan"), float("inf"), True):
+                with self.subTest(name=name, value=value), \
+                        patch("g1_action_studio.teach.SdkArmPort") as sdk:
+                    with self.assertRaisesRegex(ValueError, name):
+                        teach("unused", "left", 1, "unused.json", "unused-profile.json",
+                              execute=True, **{name: value})
+                    sdk.assert_not_called()
+
+    def test_cli_passes_timing_arguments(self):
+        from g1_action_studio.cli import main
+        with patch("g1_action_studio.teach.teach", return_value={}) as run, \
+                patch("sys.stdout", io.StringIO()):
+            self.assertEqual(main(["teach", "eth0", "--side", "left", "--stage", "soften",
+                                   "--profile", "profile.json", "--output", "trial.json",
+                                   "--takeover-seconds", "5", "--soften-seconds", "8"]), 0)
+        self.assertEqual(run.call_args.kwargs, {"takeover_seconds": 5.0, "soften_seconds": 8.0})
+
     def test_preview_does_not_load_sdk_or_write_output(self):
         data = {
                 "schema": "g1-arm7-dex3-teach-profile-v1",

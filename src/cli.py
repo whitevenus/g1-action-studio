@@ -19,6 +19,8 @@ def main(argv=None):
     teach.add_argument("interface", help="DDS 网卡，例如 eth0")
     teach.add_argument("--side", choices=("left", "right"), required=True)
     teach.add_argument("--seconds", type=int, default=3, help="hold 的保持时长；record 用回车开始和结束")
+    teach.add_argument("--takeover-seconds", type=float, default=3.0, help="手臂权重从0到1的接管时长，默认3秒")
+    teach.add_argument("--soften-seconds", type=float, default=3.0, help="示教侧手臂和手指降低刚度的时长，默认3秒")
     teach.add_argument("--output", required=True)
     teach.add_argument("--profile", required=True, help="本机候选/验收参数 JSON；hold 只需保持增益")
     teach.add_argument("--stage", choices=("hold", "soften", "record"), default="record",
@@ -65,7 +67,8 @@ def main(argv=None):
         if args.command == "teach":
             from .teach import teach
             summary = teach(args.interface, args.side, args.seconds,
-                            args.output, args.profile, args.execute, args.stage)
+                            args.output, args.profile, args.execute, args.stage,
+                            takeover_seconds=args.takeover_seconds, soften_seconds=args.soften_seconds)
         elif args.command == "preflight":
             from .preflight import preflight
             summary = preflight(args.interface, args.seconds, args.output)

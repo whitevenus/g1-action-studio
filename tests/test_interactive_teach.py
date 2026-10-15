@@ -15,7 +15,7 @@ ROOT = Path(__file__).parents[1]
 
 
 class InteractiveTeachTests(unittest.TestCase):
-    def run_session(self, planning_error=None, eof=False, initial_collision=False):
+    def run_session(self, planning_error=None, eof=False, initial_collision=False, **timing):
         clock = VirtualClock()
         initial = json.loads((ROOT / "examples/transition/action-b.json").read_text())["samples"][0]["q"]
         q, writes = list(initial), []
@@ -81,7 +81,7 @@ class InteractiveTeachTests(unittest.TestCase):
                 self.assertFalse(output.exists())
                 self.assertGreater(writes[-1]["weight"], 0)
                 return
-            result = teach("unused", "left", 3, output, ROOT/'examples/profiles/soften.json', True)
+            result = teach("unused", "left", 3, output, ROOT/'examples/profiles/soften.json', True, **timing)
         port.check_services.assert_called_once()
         return initial, writes, result, json.loads(output.read_text(encoding='utf-8'))
 
@@ -105,6 +105,17 @@ class InteractiveTeachTests(unittest.TestCase):
 
     def test_failed_return_planning_does_not_release_at_endpoint(self):
         self.run_session(planning_error='无回位路径')
+
+    def test_recording_uses_custom_ramp_times_and_keeps_manual_boundaries(self):
+        initial, writes, result, data = self.run_session(takeover_seconds=.2, soften_seconds=.4)
+        takeover, soften = writes[:11], writes[11:32]
+        self.assertAlmostEqual(takeover[-1]['t'] - takeover[0]['t'], .2)
+        self.assertAlmostEqual(soften[-1]['t'] - soften[0]['t'], .4)
+        self.assertEqual(soften[-1]['hand_kp'], 0)
+        self.assertTrue(1.0 <= result['duration_s'] <= 1.2)
+        self.assertAlmostEqual(data['samples'][0]['t'], 0)
+        self.assertEqual(writes[-1]['q'], initial)
+        self.assertEqual(writes[-1]['weight'], 0)
 
     def test_input_eof_is_not_treated_as_recording_finished(self):
         self.run_session(eof=True)
