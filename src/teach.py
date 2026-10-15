@@ -86,7 +86,7 @@ def run_session(interface, side, output, profile):
     hold_gains = tuple(profile[key] for key in ("hold_kp", "hold_kd", "hand_hold_kp", "hand_hold_kd"))
     teach_gains = tuple(profile[key] for key in ("teach_kp", "teach_kd", "hand_teach_kp", "hand_teach_kd"))
 
-    def tick(gains=hold_gains, weight=1.0, *, follow=False, capture=False):
+    def tick(gains=hold_gains, weight=1.0, *, follow=False, capture_start: float | None = None):
         nonlocal target, last_tick, control_attempted
         if stop.is_set():
             raise RuntimeError("操作员已请求停止")
@@ -129,7 +129,7 @@ def run_session(interface, side, output, profile):
             is not True
         ):
             raise RuntimeError("手臂命令发送失败；部分命令可能已送达")
-        if capture:
+        if capture_start is not None:
             samples.append(
                 {
                     "t": round(now - capture_start, 6),
@@ -150,6 +150,27 @@ def run_session(interface, side, output, profile):
             tick(gains, w0 + (w1 - w0) * blend, follow=follow)
             if i < steps:
                 time.sleep(max(0, began + (i + 1) * DT - time.monotonic()))
+
+    def record():
+        """输入线程只通知两次回车；本循环负责录制期间的保持和采样。"""
+        nonlocal stage
+        capture_start = None
+        while True:
+            try:
+                event = events.get_nowait()
+            except Empty:
+                event = None
+            if isinstance(event, Exception):
+                raise RuntimeError("录制输入已关闭") from event
+            if event == "enter":
+                if capture_start is not None:
+                    tick(teach_gains, follow=True, capture_start=capture_start)
+                    return
+                capture_start = time.monotonic()
+                stage = "录制"
+                print("RECORDING_STARTED", flush=True)
+            tick(teach_gains, follow=True, capture_start=capture_start)
+            time.sleep(DT)
 
     try:
         port = ReplaySdkPort(create_sdk(interface), time)
@@ -179,25 +200,8 @@ def run_session(interface, side, output, profile):
         stage = "降低示教刚度"
         ramp(TEACH_SOFTEN_SECONDS, 1, 1, hold_gains, teach_gains, follow=True)
         Thread(target=read_record_keys, args=(events, stop), daemon=True).start()
-        recording = False
         stage = "等待开始"
-        while True:
-            try:
-                event = events.get_nowait()
-            except Empty:
-                event = None
-            if isinstance(event, Exception):
-                raise RuntimeError("录制输入已关闭") from event
-            if event == "enter":
-                if recording:
-                    tick(teach_gains, follow=True, capture=True)
-                    break
-                recording = True
-                capture_start = time.monotonic()
-                stage = "录制"
-                print("RECORDING_STARTED", flush=True)
-            tick(teach_gains, follow=True, capture=recording)
-            time.sleep(DT)
+        record()
         # 最后一帧已冻结 target；恢复增益时不再追随手动移动。
         stage = "恢复刚度"
         ramp(1, 1, 1, teach_gains, hold_gains)

@@ -25,9 +25,9 @@ def _baseline(q, provenance, body_q=None):
     }
 
 
-def _plan(action, baseline, profile, model, speed_scale, side, error_prefix="离线轨迹"):
+def _plan(actions, baseline, profile, model, speed_scale, side, error_prefix="离线轨迹"):
     plan = create_plan(
-        action,
+        actions,
         baseline,
         model,
         profile["max_target_velocity_rad_s"],
@@ -41,7 +41,7 @@ def _plan(action, baseline, profile, model, speed_scale, side, error_prefix="离
     return plan
 
 
-def _execute(interface, action, profile, model, speed_scale, side, stop):
+def _execute(interface, actions, profile, model, speed_scale, side, stop):
     port = ReplaySdkPort(create_sdk(interface), time)
     try:
         if not port.wait_ready(5.0, stop):
@@ -51,7 +51,7 @@ def _execute(interface, action, profile, model, speed_scale, side, stop):
         if state.get("body_q") is None:
             raise RuntimeError("避碰回放需要腿/腰的当前姿态反馈")
         baseline = _baseline(state["q"], "本次执行前 rt/lowstate 实测姿态", state.get("body_q"))
-        plan = _plan(action, baseline, profile, model, speed_scale, side, error_prefix="当前姿态生成的回放计划")
+        plan = _plan(actions, baseline, profile, model, speed_scale, side, error_prefix="当前姿态生成的回放计划")
         print(
             "现场规划完成：{} 臂单次回放，目标序列 {:.2f} 秒；先执行接管前预检。".format(
                 side, plan["metrics"]["duration_s"]

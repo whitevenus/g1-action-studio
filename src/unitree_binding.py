@@ -2,8 +2,6 @@
 
 import time
 
-from .constants import ARM_SLOTS
-
 
 def read_control_state(loco, switcher):
     for attempt in range(3):
@@ -44,44 +42,6 @@ def create_service_clients():
         client.Init()
         clients.append(client)
     return tuple(clients)
-
-
-def arm_snapshot(message, clock):
-    motors = [message.motor_state[i] for i in ARM_SLOTS]
-    state = {
-        "at": clock.monotonic(),
-        "mode_pr": int(message.mode_pr),
-        "mode_machine": int(message.mode_machine),
-        "motor_modes": tuple(int(m.mode) for m in motors),
-        "q": tuple(float(m.q) for m in motors),
-        "dq": tuple(float(m.dq) for m in motors),
-    }
-    try:
-        state["body_q"] = tuple(float(message.motor_state[i].q) for i in range(ARM_SLOTS[0]))
-    except (AttributeError, IndexError, TypeError, ValueError):
-        state["body_q"] = None
-    return state
-
-
-def close_channels(port):
-    """逐个关闭并清空通道；单个失败不能阻止其余通道清理。"""
-    errors = []
-    for name in ("publisher", "arm_subscriber", "subscriber"):
-        resource = getattr(port, name, None)
-        if resource is not None:
-            try:
-                resource.Close()
-            except Exception as error:
-                errors.append("{}：{}".format(name, error))
-            finally:
-                setattr(port, name, None)
-    for resource in getattr(port, "hand_resources", []):
-        try:
-            resource.Close()
-        except Exception as error:
-            errors.append("手部通道：{}".format(error))
-    port.hand_resources = []
-    return errors
 
 
 class UnitreeReplaySDK:

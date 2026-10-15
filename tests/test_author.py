@@ -32,6 +32,20 @@ def source_file(path, *, gap=False, changed_mode=False):
 
 
 class ActionTests(unittest.TestCase):
+    def test_crop_between_samples_preserves_requested_window(self):
+        with tempfile.TemporaryDirectory(dir=TEST_ROOT) as folder:
+            source = Path(folder) / "source.json"
+            source_file(source)
+            original = source.read_bytes()
+            action = load_action(source, 0.005, 0.995)
+            self.assertEqual(source.read_bytes(), original)
+        self.assertEqual(action["source"]["start_s"], 0.005)
+        self.assertEqual(action["source"]["requested_end_s"], 0.995)
+        self.assertEqual(len(action["frames"]), 50)
+        self.assertEqual(action["frames"][-1]["t"], 0.98)
+        self.assertAlmostEqual(action["frames"][0]["q"][10], 0.001)
+        self.assertAlmostEqual(action["frames"][-1]["q"][10], 0.003)
+
     def test_build_produces_loadable_uniform_action(self):
         with tempfile.TemporaryDirectory(dir=TEST_ROOT) as folder:
             source = Path(folder) / "source.json"

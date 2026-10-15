@@ -8,13 +8,13 @@ from bisect import bisect_right
 from pathlib import Path
 
 from .constants import ACTION_SCHEMA, ARM_SLOTS, DT, EXPECTED_MODE, JOINT_NAMES, PROFILE, RECORDING_SCHEMA, SIDE_OFFSETS
-from .trajectory import finite_vector, frame_digest, interpolate_positions, metrics
+from .trajectory import Frame, finite_vector, frame_digest, interpolate_positions, metrics
 
 MAX_SOURCE_GAP = 0.10
 CODE_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:[._][a-z0-9]+)*$")
 
 
-def _interpolate(samples, times, moment):
+def _interpolate(samples: list[dict], times: list[float], moment: float) -> list[float]:
     right = bisect_right(times, moment)
     if right == 0 or (right == len(times) and moment > times[-1]):
         raise ValueError("裁剪时间超出录制范围")
@@ -72,33 +72,8 @@ def validate_action(data):
     return result
 
 
-def load_action(source, start=None, end=None, code="recorded.action", version=1, name=None):
-    """录制自动转成动作；已有动作直接加载，不重复制作。"""
-    source = Path(source)
-    raw = source.read_bytes()
-    data = json.loads(raw.decode("utf-8-sig"))
-    if not isinstance(data, dict):
-        raise ValueError("输入必须是录制或动作 JSON 对象")
-    if data.get("schema") == ACTION_SCHEMA:
-        if start is not None or end is not None:
-            raise ValueError("裁剪输入须为原始录制文件")
-        validate_action(data)
-        return data
-    if (
-        data.get("schema") != RECORDING_SCHEMA
-        or data.get("target_profile") != PROFILE
-        or data.get("arm_slots") != list(ARM_SLOTS)
-        or data.get("joint_names") != list(JOINT_NAMES)
-    ):
-        raise ValueError("不支持的录制或动作格式")
-    rows = data.get("samples")
-    if not isinstance(rows, list) or len(rows) < 3:
-        raise ValueError("至少需要三帧状态")
-    if not CODE_PATTERN.fullmatch(code) or len(code) > 120:
-        raise ValueError("动作代码只能使用小写字母、数字、点和下划线")
-    name = source.stem if name is None else name.strip()
-    if type(version) is not int or version <= 0 or not name:
-        raise ValueError("动作版本和名称无效")
+def _recording_frames(rows: list[dict], start: float | None, end: float | None) -> tuple[list[Frame], float, float]:
+    """校验录制状态并按裁剪区间重采样；不读取文件或修改原始数据。"""
     samples = []
     last_time = float("-inf")
     for row in rows:
@@ -131,6 +106,44 @@ def load_action(source, start=None, end=None, code="recorded.action", version=1,
     if modes != {EXPECTED_MODE}:
         raise ValueError("录制模式不符合 0/5")
     frames = [{"t": round(i * DT, 6), "q": _interpolate(samples, times, start + i * DT)} for i in range(steps + 1)]
+    return frames, start, end
+
+
+def load_action(
+    source: str | Path,
+    start: float | None = None,
+    end: float | None = None,
+    code: str = "recorded.action",
+    version: int = 1,
+    name: str | None = None,
+) -> dict:
+    """录制自动转成动作；已有动作直接加载，不重复制作。"""
+    source = Path(source)
+    raw = source.read_bytes()
+    data = json.loads(raw.decode("utf-8-sig"))
+    if not isinstance(data, dict):
+        raise ValueError("输入必须是录制或动作 JSON 对象")
+    if data.get("schema") == ACTION_SCHEMA:
+        if start is not None or end is not None:
+            raise ValueError("裁剪输入须为原始录制文件")
+        validate_action(data)
+        return data
+    if (
+        data.get("schema") != RECORDING_SCHEMA
+        or data.get("target_profile") != PROFILE
+        or data.get("arm_slots") != list(ARM_SLOTS)
+        or data.get("joint_names") != list(JOINT_NAMES)
+    ):
+        raise ValueError("不支持的录制或动作格式")
+    rows = data.get("samples")
+    if not isinstance(rows, list) or len(rows) < 3:
+        raise ValueError("至少需要三帧状态")
+    if not CODE_PATTERN.fullmatch(code) or len(code) > 120:
+        raise ValueError("动作代码只能使用小写字母、数字、点和下划线")
+    name = source.stem if name is None else name.strip()
+    if type(version) is not int or version <= 0 or not name:
+        raise ValueError("动作版本和名称无效")
+    frames, start, end = _recording_frames(rows, start, end)
     return {
         "schema": ACTION_SCHEMA,
         "kind": "single",

@@ -3,10 +3,12 @@
 import math
 import xml.etree.ElementTree as ET
 from bisect import bisect_right
+from collections.abc import Sequence
 from pathlib import Path
 
 from .constants import ARM_SLOTS, DT, JOINT_NAMES, PLAN_SCHEMA, PROFILE
 from .trajectory import (
+    Frame,
     finite_vector,
     frame_digest,
     hold_other_side,
@@ -48,7 +50,7 @@ def _steps(seconds):
     return steps
 
 
-def retime_frames(frames, speed_scale, smooth=True):
+def retime_frames(frames: list[Frame], speed_scale: float, smooth: bool = True) -> list[Frame]:
     """沿原路径调整时间；单个动作平滑两端，组合动作保留已有衔接。"""
     joint_motion(frames)
     if type(speed_scale) not in (int, float) or not math.isfinite(speed_scale) or not 0 < speed_scale <= 1:
@@ -99,7 +101,7 @@ def build_schedule(
             )
         phases.append({"phase": name, "start_s": began, "end_s": output[-1]["t"]})
 
-    def add_motion(name, motion, minimum_steps):
+    def add_motion(name, motion, minimum_steps=0):
         began = output[-1]["t"]
         positions = [frame["q"] for frame in motion[1:]]
         positions += [motion[-1]["q"]] * max(0, minimum_steps - len(positions))
@@ -112,10 +114,7 @@ def build_schedule(
         transition("enter", baseline, frames[0]["q"], durations[1])
     else:
         add_motion("enter", enter_motion, durations[1])
-    began = output[-1]["t"]
-    for frame in frames[1:]:
-        output.append({"t": round(len(output) * DT, 6), "phase": "replay", "q": list(frame["q"]), "weight": 1.0})
-    phases.append({"phase": "replay", "start_s": began, "end_s": output[-1]["t"]})
+    add_motion("replay", frames)
     if return_motion is None:
         transition("return", frames[-1]["q"], baseline, durations[2])
     else:
@@ -124,7 +123,7 @@ def build_schedule(
     return output, phases
 
 
-def sample_schedule(frames, elapsed, times=None):
+def sample_schedule(frames: Sequence[Frame], elapsed: float, times: Sequence[float] | None = None) -> Frame:
     """按单调时钟的相对秒数插值；开始前/结束后保持端点，避免依赖循环帧数。"""
     if not math.isfinite(elapsed):
         raise ValueError("播放时间必须有限")
@@ -208,14 +207,14 @@ def create_plan(
         raise ValueError("回放侧必须为 left 或 right")
     if any(action["kind"] == "sequence" and side != action["side"] for action in actions):
         raise ValueError("组合动作只能按制作时的回放侧执行")
-    motions = [
-        action["frames"]
-        if speed_scale is None
-        else retime_frames(action["frames"], speed_scale, smooth=action["kind"] == "single")
-        for action in actions
-    ]
-    if side is not None:
-        motions = [hold_other_side(motion, q, side) for motion in motions]
+    motions = []
+    for action in actions:
+        motion = action["frames"]
+        if speed_scale is not None:
+            motion = retime_frames(motion, speed_scale, smooth=action["kind"] == "single")
+        if side is not None:
+            motion = hold_other_side(motion, q, side)
+        motions.append(motion)
     collision_model = None
     body_pose = None
     enter_motion = return_motion = None

@@ -18,7 +18,6 @@ from .constants import (
     WEIGHT_SLOT,
 )
 from .trajectory import finite_vector
-from .unitree_binding import arm_snapshot, close_channels
 
 
 def validate_snapshot(snapshot, now, timeout=STATE_TIMEOUT) -> dict:
@@ -75,7 +74,19 @@ class ReplaySdkPort:
 
     def _on_state(self, message):
         try:
-            state = arm_snapshot(message, self.clock)
+            motors = [message.motor_state[i] for i in ARM_SLOTS]
+            state = {
+                "at": self.clock.monotonic(),
+                "mode_pr": int(message.mode_pr),
+                "mode_machine": int(message.mode_machine),
+                "motor_modes": tuple(int(m.mode) for m in motors),
+                "q": tuple(float(m.q) for m in motors),
+                "dq": tuple(float(m.dq) for m in motors),
+            }
+            try:
+                state["body_q"] = tuple(float(message.motor_state[i].q) for i in range(ARM_SLOTS[0]))
+            except (AttributeError, IndexError, TypeError, ValueError):
+                state["body_q"] = None
         except (AttributeError, TypeError, ValueError, IndexError):
             # 不沿用旧反馈掩盖损坏消息。
             state = None
@@ -179,7 +190,23 @@ class ReplaySdkPort:
                 raise RuntimeError("Dex3-1 {} 命令发送失败；部分命令可能已送达".format(hand_side))
         return True
 
-    def close(self):
-        errors = close_channels(self)
+    def close(self) -> None:
+        """关闭本端口拥有的全部通道；单个失败不能阻止其余通道清理。"""
+        errors = []
+        for name in ("publisher", "arm_subscriber", "subscriber"):
+            resource = getattr(self, name, None)
+            if resource is not None:
+                try:
+                    resource.Close()
+                except Exception as error:
+                    errors.append("{}：{}".format(name, error))
+                finally:
+                    setattr(self, name, None)
+        for resource in getattr(self, "hand_resources", []):
+            try:
+                resource.Close()
+            except Exception as error:
+                errors.append("手部通道：{}".format(error))
+        self.hand_resources = []
         if errors:
             raise RuntimeError("；".join(errors))

@@ -3,11 +3,22 @@
 import hashlib
 import json
 import math
+from collections.abc import Sequence
+from typing import NotRequired, TypedDict
 
 from .constants import DT, JOINT_COUNT, SIDE_OFFSETS
 
 
-def finite_vector(values):
+class Frame(TypedDict):
+    """轨迹统一使用秒和完整关节位置；调度阶段才附加阶段与控制权重。"""
+
+    t: float
+    q: list[float]
+    phase: NotRequired[str]
+    weight: NotRequired[float]
+
+
+def finite_vector(values: object) -> list[float]:
     if not isinstance(values, list) or len(values) != JOINT_COUNT:
         raise ValueError("每帧必须包含双臂和双手的全部 28 个关节")
     result = [float(value) for value in values]
@@ -16,21 +27,21 @@ def finite_vector(values):
     return result
 
 
-def frame_digest(frames):
+def frame_digest(frames: Sequence[Frame]) -> str:
     canonical = json.dumps(frames, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
 
 
-def interpolate_positions(start, end, ratio):
+def interpolate_positions(start: Sequence[float], end: Sequence[float], ratio: float) -> list[float]:
     return [a + (b - a) * ratio for a, b in zip(start, end)]
 
 
-def smoothstep(ratio):
+def smoothstep(ratio: float) -> float:
     """五次平滑曲线：两端速度和加速度为零。"""
     return ratio**3 * (10 + ratio * (-15 + 6 * ratio))
 
 
-def hold_other_side(frames, baseline, side):
+def hold_other_side(frames: Sequence[Frame], baseline: Sequence[float], side: str) -> list[Frame]:
     """只保留选中侧的动作，另一侧统一使用基线位置。"""
     selected = SIDE_OFFSETS[side]
     return [
@@ -39,7 +50,7 @@ def hold_other_side(frames, baseline, side):
     ]
 
 
-def derivatives(values):
+def derivatives(values: Sequence[float]) -> tuple[list[float], list[float]]:
     """单个关节：位置差分得到速度，再差分得到加速度。"""
     velocities = [(b - a) / DT for a, b in zip(values, values[1:])]
     accelerations = [(b - a) / DT for a, b in zip(velocities, velocities[1:])]

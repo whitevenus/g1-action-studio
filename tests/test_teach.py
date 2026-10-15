@@ -99,6 +99,22 @@ class TeachTests(unittest.TestCase):
 
 
 class PortTests(unittest.TestCase):
+    def test_multiple_close_failures_still_attempt_all_channels_once(self):
+        clock = VirtualClock()
+        sdk = SimulatedSDK(clock, [0.0] * 28)
+        port = ReplaySdkPort(sdk, clock)
+        port.hand_profile = load_teach_profile(ROOT / "examples/profiles/teach.json")
+        port.start_publisher()
+        for resource in sdk.resources:
+            resource.Close = Mock(wraps=resource.Close)
+        port.publisher.Close.side_effect = RuntimeError("手臂关闭失败")
+        port.hand_publishers["right"].Close.side_effect = RuntimeError("手指关闭失败")
+        with self.assertRaisesRegex(RuntimeError, "手臂关闭失败.*手指关闭失败"):
+            port.close()
+        port.close()
+        for resource in sdk.resources:
+            resource.Close.assert_called_once()
+
     def test_wire_command_keeps_body_slots_untouched_and_uses_separate_hand_commands(self):
         clock = VirtualClock()
         sdk = SimulatedSDK(clock, [0.0] * 28)
