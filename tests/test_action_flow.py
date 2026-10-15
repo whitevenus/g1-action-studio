@@ -23,6 +23,7 @@ ROOT = Path(__file__).parents[1]
 class ActionFixtures:
     def setUp(self):
         try:
+            import ompl
             from g1_action_studio.collision import CollisionModel
             CollisionModel()
         except ImportError as error:
@@ -101,6 +102,7 @@ class CombinedFlowTests(ActionFixtures, unittest.TestCase):
     def setUp(self):
         super().setUp()
         try:
+            import ompl
             from g1_action_studio.collision import CollisionModel
             model = CollisionModel()
         except ImportError as error:
@@ -153,7 +155,7 @@ class CombinedFlowTests(ActionFixtures, unittest.TestCase):
         model = CollisionModel()
         self.assertFalse(model.edge_clear(start, self.q, 0.02))
         action = self.root / "routed.json"
-        plan_transition(self.before, self.after, action, seed=5)
+        plan_transition(self.before, self.after, action)
         self.assertGreater(load_action(action)["transition_metrics"]["duration_s"], 0)
         result, sdk, report = self.execute([self.before, self.after], q=start)
         self.assertEqual(result["status"], "completed", report["errors"])

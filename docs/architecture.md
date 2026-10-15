@@ -19,7 +19,7 @@ src/
   executor.py        反馈检查、回位等待、取消和异常释放
   replay_sdk.py      回放执行器的 DDS 读写接口
   unitree_binding.py 官方 SDK 绑定、服务查询、反馈快照与通道清理
-  collision.py       碰撞检查、绕行搜索和路径平滑
+  collision.py       MuJoCo 碰撞、OMPL RRTConnect 与路径平滑
   transition.py      衔接动作，保存可回放的统一动作
   resources/         关节范围、碰撞模型和网格资源
 ```
@@ -50,7 +50,7 @@ src/
 1. `cli.main → live_replay.replay → author.load_action`：录制转为内存动作，已有动作自动检查后直接加载。
 2. `load_replay_profile`：读取本机参数。
 3. 预览直接调用 `replay.create_plan`；执行由 `_execute` 读取当前反馈，再调用一次 `create_plan`。
-4. `create_plan` 生成接管、进入、整段播放、回位、释放序列，自动检查范围和速度/加速度。所有回放都调用 `collision.find_path / smooth_path` 规划进入与回位，并检查整段碰撞。
+4. `create_plan` 生成接管、进入、整段播放、回位、释放序列，自动检查范围和速度/加速度。所有回放都调用 `collision.find_path / parameterize_path` 规划进入与回位，并检查整段碰撞。
 5. `executor.execute_replay` 持续读取反馈、检查后发送目标；整段只接管和释放一次。多个文件按命令参数顺序编排，不保存中间组合文件。
 
 `build` 可选，只负责把内存动作保存到文件。`transition` 调用同一个 `load_action` 读取两段动作，衔接后仍输出统一动作；`replay` 不需要另一套执行器。`trajectory` 只做计算，不处理网络或运行状态。
@@ -70,3 +70,5 @@ src/
 测试使用合成状态与替身端口，默认测试不连接机器人。开发验证命令、旧格式兼容与独立 `audit` 已删除，必要检查在实际调用处自动执行。
 
 示教 `record_session` 的输入线程只产生回车事件；主控制循环持续发送指令。结束时冻结终点、恢复增益，再将纯几何回位规划交给工作线程；等待规划期间继续保持终点，回位稳定后才释放。
+
+`find_path` 仅把选中手臂的 7 个关节接入 OMPL，另一侧固定。OMPL 负责搜索和路点简化，`MotionValidator` 复用原来的 MuJoCo 区间检查；不再维护手写随机树。

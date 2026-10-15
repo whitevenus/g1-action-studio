@@ -313,9 +313,9 @@ def read_record_keys(events, stop):
 
 
 def plan_return(start, end, side, body_q):
-    from .collision import CollisionModel, find_path, smooth_path
+    from .collision import CollisionModel, find_path, parameterize_path
     model = CollisionModel(body_q)
-    motion = smooth_path(find_path(model, start, end, side), 0.5, 2.0)
+    motion = parameterize_path(find_path(model, start, end, side), 0.5, 2.0)
     model.check_motion(motion, 0.02)
     return motion
 

@@ -187,19 +187,19 @@ def create_plan(data, baseline, model_path, max_velocity, max_acceleration,
         settings = next((action["collision"] for action in actions if action["kind"] == "sequence"),
                         {"body_q": [0.0] * 15, "clearance_m": 0.02})
         body_pose = list(baseline.get("body_q", settings["body_q"]))
-        from .collision import CollisionModel, find_path, smooth_path
+        from .collision import CollisionModel, find_path, parameterize_path
         collision_model = CollisionModel(body_pose)
-        margin, seed = settings["clearance_m"], actions[0].get("seed", 0)
+        margin = settings["clearance_m"]
         motion = list(motions[0])
         for following in motions[1:]:
-            path = find_path(collision_model, motion[-1]["q"], following[0]["q"], side, margin, seed)
-            bridge = smooth_path(path, max_velocity, max_acceleration)
+            path = find_path(collision_model, motion[-1]["q"], following[0]["q"], side, margin)
+            bridge = parameterize_path(path, max_velocity, max_acceleration)
             for frame in bridge[1:] + following[1:]:
                 motion.append({"t": round(len(motion) * DT, 6), "q": list(frame["q"])})
-        enter_path = find_path(collision_model, q, motion[0]["q"], side, margin, seed)
-        return_path = find_path(collision_model, motion[-1]["q"], q, side, margin, seed)
-        enter_motion = smooth_path(enter_path, max_velocity, max_acceleration)
-        return_motion = smooth_path(return_path, max_velocity, max_acceleration)
+        enter_path = find_path(collision_model, q, motion[0]["q"], side, margin)
+        return_path = find_path(collision_model, motion[-1]["q"], q, side, margin)
+        enter_motion = parameterize_path(enter_path, max_velocity, max_acceleration)
+        return_motion = parameterize_path(return_path, max_velocity, max_acceleration)
     else:
         motion = motions[0]
     frames, phases = build_schedule(motion, q, takeover, enter, return_seconds, release,

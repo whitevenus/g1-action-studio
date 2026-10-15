@@ -1,7 +1,6 @@
 """固定腿/腰姿态下的双臂碰撞检查；只计算几何，不运行 DDS 或动力学。"""
 
 import math
-import random
 
 from .constants import ARM_JOINT_COUNT, ARM_OFFSETS, ARM_SLOTS, COLLISION_MODEL, DT, JOINT_NAMES
 from .trajectory import finite_vector, interpolate_positions, smoothstep
@@ -13,7 +12,7 @@ class CollisionModel:
             import mujoco
             import numpy as np
         except ImportError as error:
-            raise ImportError('离线避碰需要 Python 3.10+，请安装 pip install -e ".[planning]"') from error
+            raise ImportError('避碰检查需要 MuJoCo 3.15+；请安装 pip install -e ".[planning]"') from error
         self.mj, self.np = mujoco, np
         self.model = mujoco.MjModel.from_xml_path(str(COLLISION_MODEL))
         self.data = mujoco.MjData(self.model)
@@ -138,14 +137,19 @@ class CollisionModel:
         return True
 
 
-def find_path(model, start, end, side, margin=0.02, seed=0, iterations=1200):
-    """先尝试直连，否则用两棵小型 RRT 树寻找绕行；失败就拒绝。"""
+def find_path(model, start, end, side, margin=0.02, timeout=5.0):
+    """优先直连，否则用 OMPL RRTConnect；全部连接复用 MuJoCo 区间检查。"""
+    try:
+        from ompl import base as ob, geometric as og
+    except ImportError as error:
+        raise ImportError('避碰规划需要 OMPL 2.0.1；请在 Linux Python 3.10+ 安装 .[planning]') from error
     start, end = model.validate(start), model.validate(end)
-    if side not in ('left', 'right') or not 0.001 <= margin <= 0.10:
+    if side not in ARM_OFFSETS or not 0.001 <= margin <= 0.10:
         raise ValueError('side 须为 left/right；避碰余量须为 0.001–0.10 米')
+    if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout < 0:
+        raise ValueError('规划时间预算须为非负有限数')
     selected = ARM_OFFSETS[side]
-    fixed = set(range(len(ARM_SLOTS))) - set(selected)
-    if any(start[i] != end[i] for i in fixed):
+    if any(start[i] != end[i] for i in range(len(ARM_SLOTS)) if i not in selected):
         raise ValueError('过渡时另一侧手臂必须保持同一姿态')
     for label, q in [('开始', start), ('结束', end)]:
         check = model.clearance(q, margin)
@@ -153,61 +157,47 @@ def find_path(model, start, end, side, margin=0.02, seed=0, iterations=1200):
             raise ValueError('{}姿态碰撞或余量不足：{}'.format(label, check))
     if model.edge_clear(start, end, margin):
         return [start, end]
-    rng = random.Random(seed)
-    trees = [([start], [-1]), ([end], [-1])]
+    space = ob.RealVectorStateSpace(len(selected))
+    bounds = ob.RealVectorBounds(len(selected))
+    for j, i in enumerate(selected):
+        bounds.setLow(j, float(model.limits[i, 0]))
+        bounds.setHigh(j, float(model.limits[i, 1]))
+    space.setBounds(bounds)
+    setup = og.SimpleSetup(space)
+    si = setup.getSpaceInformation()
 
-    def extend(tree, target):
-        points, parents = tree
-        nearest = min(range(len(points)), key=lambda n: sum((points[n][i] - target[i])**2 for i in selected))
-        distance = math.sqrt(sum((points[nearest][i] - target[i])**2 for i in selected))
-        ratio = min(1.0, 0.30 / max(distance, 1e-12))
-        q = interpolate_positions(points[nearest], target, ratio)
-        if not model.edge_clear(points[nearest], q, margin):
-            return None
-        points.append(q)
-        parents.append(nearest)
-        return len(points)-1
+    def positions(state):
+        q = list(start)
+        for j, i in enumerate(selected):
+            q[i] = state[j]
+        return q
 
-    def branch(tree, index):
-        path = []
-        while index >= 0:
-            path.append(tree[0][index])
-            index = tree[1][index]
-        return list(reversed(path))
+    class MotionValidator(ob.MotionValidator):
+        def checkMotion(self, before, after):
+            return model.edge_clear(positions(before), positions(after), margin)
 
-    for attempt in range(iterations):
-        active = attempt % 2
-        target = list(start)
-        for i in selected:
-            target[i] = rng.uniform(float(model.limits[i,0]), float(model.limits[i,1]))
-        first = extend(trees[active], target)
-        if first is None:
-            continue
-        meeting = trees[active][0][first]
-        # 限制另一棵树的连接次数，避免内层循环无限搜索。
-        for _ in range(40):
-            second = extend(trees[1-active], meeting)
-            if second is None:
-                break
-            if max(abs(a-b) for a,b in zip(trees[1-active][0][second], meeting)) < 1e-9:
-                a, b = branch(trees[active], first), branch(trees[1-active], second)
-                path = a + list(reversed(b))[1:]
-                if active == 1:
-                    path.reverse()
-                # 尝试删去多余路点，每条新连接都重新检查碰撞。
-                result, index = [path[0]], 0
-                while index < len(path)-1:
-                    following = len(path)-1
-                    while following > index+1 and not model.edge_clear(path[index], path[following], margin):
-                        following -= 1
-                    result.append(path[following])
-                    index = following
-                return result
-    raise ValueError('离线规划预算内未找到避碰路径；不生成可播放结果')
+    validator = MotionValidator(si)
+    si.setMotionValidator(validator)
+    setup.setStateValidityChecker(lambda state: model.clearance(positions(state), margin)['valid'])
+    planner = og.RRTConnect(si)
+    planner.setRange(0.30)
+    setup.setPlanner(planner)
+    first, last = space.allocState(), space.allocState()
+    for j, i in enumerate(selected):
+        first[j], last[j] = start[i], end[i]
+    setup.setStartAndGoalStates(first, last)
+    setup.solve(float(timeout))
+    if not setup.haveExactSolutionPath():
+        raise ValueError('OMPL 规划预算内未找到完整避碰路径；不生成可播放结果')
+    path = setup.getSolutionPath()
+    simplifier = setup.getPathSimplifier()
+    simplifier.reduceVertices(path)
+    simplifier.smoothBSpline(path, 2)
+    return [positions(state) for state in path.getStates()]
 
 
-def smooth_path(path, max_velocity=0.5, max_acceleration=2.0):
-    """沿已检查的关节线段做五次时间插值；每个拐点速度和加速度为零。"""
+def parameterize_path(path, max_velocity=0.5, max_acceleration=2.0):
+    """为已规划的路径安排时长和 50 Hz 采样，不改变空间路径。"""
     if any(not math.isfinite(v) or v <= 0 for v in (max_velocity, max_acceleration)):
         raise ValueError('速度、加速度上限必须为正有限数')
     frames = [{'t': 0.0, 'q': list(path[0]), 'phase': 'transition'}]

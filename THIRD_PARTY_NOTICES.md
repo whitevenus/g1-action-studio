@@ -25,3 +25,7 @@
 项目不附带厂商二进制、SDK 实现或真实设备录制。
 真机功能使用单独安装的[宇树 SDK2 Python](https://github.com/unitreerobotics/unitree_sdk2_python)，
 其源码遵循自身许可。本项目独立开发，不代表宇树官方认可。
+
+## 规划库
+
+路径搜索和路点简化使用 [OMPL](https://github.com/ompl/ompl) 2.0.1（BSD-3-Clause）；FK 与几何距离查询使用 [MuJoCo](https://github.com/google-deepmind/mujoco)（Apache-2.0）。两者由 `planning` 依赖安装，项目不复制其算法实现。

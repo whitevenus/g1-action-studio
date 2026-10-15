@@ -16,7 +16,7 @@ docs/       代码导航与避碰说明
 data/       个人录制和验证输出
 ```
 
-Python 3.8 及以上。文件整理只用标准库；示教录制与回放的避碰规划需要 Python 3.10+ 和 MuJoCo（`planning` 依赖）。真机功能需要另外安装官方 `unitree_sdk2py` 和兼容的 CycloneDDS。不要把 Python 包版本兼容等同于机器人固件兼容。
+Python 3.8 及以上。文件整理只用标准库；示教录制与回放的避碰规划需要 Python 3.10+ 、Linux 环境及 OMPL + MuJoCo（`planning` 依赖）。真机功能需要另外安装官方 `unitree_sdk2py` 和兼容的 CycloneDDS。不要把 Python 包版本兼容等同于机器人固件兼容。
 
 ## 安装与运行
 
@@ -27,7 +27,8 @@ uv sync
 uv run g1-action-studio --help
 ```
 
-开发依赖：`uv sync --extra dev`。避碰规划依赖见下方示例。
+开发依赖：`uv sync --extra dev`。Linux 下安装 `uv sync --extra planning` 即包含 OMPL 2.0.1 和 MuJoCo 3.15+。
+Ubuntu ARM64 与 WSL Linux x86_64 均使用各自架构的安装包；Windows 原生环境用于文件整理，规划在 Linux 中运行。
 
 真机 SDK 按[宇树官方说明](https://github.com/unitreerobotics/unitree_sdk2_python)安装到项目 `.venv/`，本项目不附带厂商源码或二进制。
 
@@ -50,10 +51,10 @@ uv run --extra planning g1-action-studio replay unused examples/transition/actio
 ```bash
 uv sync --extra planning
 uv run --extra planning g1-action-studio transition examples/transition/action-a.json examples/transition/action-b.json \
-  --side left --seed 5 --output data/transition-preview.json
+  --side left --output data/transition-preview.json
 ```
 
-它输出“动作 A → 绕行过渡 → 动作 B”，检查完整轨迹及帧间运动。示例的直接连接会穿过机体，但规划器会绕开。过渡拐点平滑停住再出发，暂不做不停顿混合。默认腿和腰固定在模型参考零位；可通过 `--body-pose` 提供 J0–J14 的固定姿态。
+它输出“动作 A → 绕行过渡 → 动作 B”，检查完整轨迹及帧间运动。示例的直接连接会穿过机体，但规划器会绕开。OMPL RRTConnect 搜索路径，再用其原生接口简化路点、做 B-spline 空间平滑；过渡拐点平滑停住再出发，暂不做不停顿混合。默认腿和腰固定在模型参考零位；可通过 `--body-pose` 提供 J0–J14 的固定姿态。
 
 衔接结果与单个动作使用同一种 `g1-arm7-action-v1` 格式，可以直接交给 `replay`：
 

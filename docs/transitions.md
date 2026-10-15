@@ -4,12 +4,12 @@
 
 ## 使用
 
-Python 3.10+，在项目根目录运行：
+Linux Python 3.10+，使用 OMPL 2.0.1 和 MuJoCo 3.15+，在项目根目录运行：
 
 ```bash
 python -m pip install -e '.[planning]'
 g1-action-studio transition examples/transition/action-a.json examples/transition/action-b.json \
-  --side left --seed 5 --clearance 0.02 \
+  --side left --clearance 0.02 \
   --max-velocity 0.5 --max-acceleration 2.0 \
   --output data/transition-preview.json
 ```
@@ -39,10 +39,10 @@ uv run --extra planning g1-action-studio replay eth0 data/my-combined.json \
 ## 规划流程
 
 1. 检查动作 A 末帧和 B 首帧的关节范围与几何间隙。
-2. 优先尝试关节空间直连。遇到碰撞或余量不足，用有预算的双向 RRT 搜索绕行路径。
-3. 尝试删去多余路点，每次删减都重新检查连接段。
+2. 优先尝试关节空间直连。遇到碰撞或余量不足，用 OMPL `RRTConnect` 搜索绕行路径，单次搜索预算默认 5 秒；只接受到达目标的完整解。
+3. OMPL `reduceVertices` 简化路点，`smoothBSpline` 做空间平滑。搜索、简化和平滑均通过自定义 `MotionValidator` 调用同一个 MuJoCo `edge_clear`，不使用默认离散采样代替区间检查。
 4. 沿每条安全线段做五次时间插值，按速度、加速度上限计算时长。路点处解析速度、加速度为零。
-   几何路径不被平滑曲线“切角”，避免处理后又穿过障碍。
+   时间参数化保持 OMPL 输出的分段路径，空间平滑产生的新连接已由碰撞检查确认有效。
 5. 检查两段完整动作、过渡及所有帧间区间，再保存结果。
 
 碰撞检查使用 MuJoCo 的凸几何距离查询，不依赖仿真接触过滤器。每段区间从中点检查，
@@ -71,6 +71,8 @@ uv run --extra planning g1-action-studio replay eth0 data/my-combined.json \
 ## 验证案例
 
 `examples/transition/action-a.json` 和 `action-b.json` 是合成案例：端点无碰撞且满足余量，
-直接连接在中途穿入骨盆附近。种子 5 的规划生成绕行路径。测试检查端点、直接段失败、
+直接连接在中途穿入骨盆附近。OMPL 搜索生成绕行路径，具体路点可能随运行变化。测试检查端点、直接段失败、
 绕行段与完整序列通过、速度/加速度上限、另一侧固定、动作内部碰撞拒绝、无路径拒绝和禁止输出覆盖。
 这些例子不用于真机执行。
+
+原手写 RRT 的随机种子与迭代次数参数已删除，`transition` 不再提供 `--seed`。动作文件格式、示教与回放操作保持不变。空间平滑使用 OMPL B-spline。`parameterize_path` 仅负责运动时长、速度/加速度约束和 50 Hz 时间采样；它不再承担空间路径优化。当前仍在输出路点处停稳，不实现不停顿轨迹混合。

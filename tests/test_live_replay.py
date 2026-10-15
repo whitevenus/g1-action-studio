@@ -19,6 +19,7 @@ from fake_sdk import SimulatedSDK, VirtualClock
 class LiveReplayTests(unittest.TestCase):
     def setUp(self):
         try:
+            import ompl
             from g1_action_studio.collision import CollisionModel
             CollisionModel()
         except ImportError as error:

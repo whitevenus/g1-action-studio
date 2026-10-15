@@ -7,12 +7,12 @@ from .constants import ARM_OFFSETS, ARM_SLOTS, COLLISION_MODEL, ACTION_SCHEMA, D
 from .author import load_action
 from .config import write_json
 from .trajectory import frame_digest, hold_other_arm, metrics
-from .collision import CollisionModel, find_path, smooth_path
+from .collision import CollisionModel, find_path, parameterize_path
 from .replay import retime_frames, screen_schedule
 
 
 def plan_transition(before, after, output, side='left', speed_scale=1.0,
-                    margin=0.02, max_velocity=0.5, max_acceleration=2.0, seed=0, body_q=None):
+                    margin=0.02, max_velocity=0.5, max_acceleration=2.0, body_q=None):
     if Path(output).exists():
         raise FileExistsError('输出文件已存在，请换新路径')
     model = CollisionModel(body_q)
@@ -27,8 +27,8 @@ def plan_transition(before, after, output, side='left', speed_scale=1.0,
         raise ValueError('side 须为 left/right；避碰余量须为 0.001–0.10 米')
     first = hold_other_arm(first, baseline, side)
     second = hold_other_arm(second, baseline, side)
-    path = find_path(model, first[-1]['q'], second[0]['q'], side, margin, seed)
-    bridge = smooth_path(path, max_velocity, max_acceleration)
+    path = find_path(model, first[-1]['q'], second[0]['q'], side, margin)
+    bridge = parameterize_path(path, max_velocity, max_acceleration)
     frames = []
     for name, section in [('action_1', first), ('transition', bridge), ('action_2', second)]:
         for frame in section if not frames else section[1:]:
@@ -41,7 +41,7 @@ def plan_transition(before, after, output, side='left', speed_scale=1.0,
               'arm_slots':list(ARM_SLOTS), 'status':'offline_collision_pass',
               'action_code':'combined.action', 'action_version':1, 'display_name':'组合动作',
               'synthetic':any(action['synthetic'] for action in actions),
-              'side':side, 'speed_scale':speed_scale, 'seed':seed,
+              'side':side, 'speed_scale':speed_scale, 'planner':'OMPL RRTConnect',
               'model_xml_sha256':hashlib.sha256(COLLISION_MODEL.read_bytes()).hexdigest(),
               'sources':[{'file':Path(p).name, 'trajectory_sha256':action['trajectory_sha256']}
                          for p,action in zip((before,after),actions)],

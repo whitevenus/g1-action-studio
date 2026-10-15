@@ -63,7 +63,6 @@ def main(argv=None):
     transition.add_argument("--max-velocity", type=float, default=0.5)
     transition.add_argument("--max-acceleration", type=float, default=2.0)
     transition.add_argument("--body-pose", help="固定腿/腰姿态 JSON：J0–J14 的 15 个弧度值；默认参考零位")
-    transition.add_argument("--seed", type=int, default=0)
     transition.add_argument("--output", required=True)
 
     args = parser.parse_args(argv)
@@ -93,7 +92,7 @@ def main(argv=None):
             from .transition import plan_transition
             body_q = None if args.body_pose is None else read_json(args.body_pose)
             summary = plan_transition(args.before, args.after, args.output, args.side, args.speed_scale,
-                                      args.clearance, args.max_velocity, args.max_acceleration, args.seed, body_q)
+                                      args.clearance, args.max_velocity, args.max_acceleration, body_q)
             summary["path"] = args.output
     except (OSError, ValueError, RuntimeError, ImportError, KeyError, TypeError) as error:
         print("失败：{}".format(error), file=sys.stderr)
