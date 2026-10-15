@@ -139,7 +139,7 @@ class LiveReplayTests(unittest.TestCase):
         from g1_action_studio.author import load_action
 
         self.source.write_bytes(original)
-        draft = load_action(self.source, None, None, "trial.left_replay", 1, "单臂示教回放试验")
+        draft = load_action(self.source, code="trial.left_replay", version=1, name="单臂示教回放试验")
         self.assertEqual(draft["source"]["sha256"], hashlib.sha256(original).hexdigest())
         self.assertEqual(report["plan"]["source_trajectory_sha256"], draft["trajectory_sha256"])
 

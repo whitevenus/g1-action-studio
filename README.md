@@ -113,12 +113,14 @@ uv run --extra planning g1-action-studio teach eth0 --side left \
 
 `teach` 保存 `g1-arm7-dex3-state-recording-v1` 示教录制文件，可直接回放，无需先 `build`。
 
-只在需要裁剪、命名或保存可复用动作时使用 `build`：
+需要命名或保存可复用动作时使用 `build`。它将整段示教录制转换为动作，起止由示教时的两次回车决定：
 
 ```bash
 uv run g1-action-studio build data/recording-001.json \
-  --start 1 --end 8 --name 招手 --code greeting.wave --output data/wave.json
+  --name 招手 --code greeting.wave --output data/wave.json
 ```
+
+转换时自动检查整段状态并重采样到 50 Hz；末尾不足一个采样周期时，补齐到下一个采样点并保留最后的实测姿态。
 
 单个动作和衔接动作均保存为 `g1-arm7-dex3-action-v1`，核心内容都是 `frames=[{t,q}]`。`replay` 自动识别录制与动作，已有动作直接读取，不重新制作。不再提供旧格式兼容和独立 `audit`。
 

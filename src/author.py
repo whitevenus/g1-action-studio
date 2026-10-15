@@ -16,14 +16,10 @@ CODE_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:[._][a-z0-9]+)*$")
 
 def _interpolate(samples: list[dict], times: list[float], moment: float) -> list[float]:
     right = bisect_right(times, moment)
-    if right == 0 or (right == len(times) and moment > times[-1]):
-        raise ValueError("裁剪时间超出录制范围")
     if right == len(times):
         return list(samples[-1]["q"])
     left = right - 1
     span = times[right] - times[left]
-    if span > MAX_SOURCE_GAP:
-        raise ValueError("录制中存在超过 0.1 秒的状态缺口")
     ratio = (moment - times[left]) / span
     return interpolate_positions(samples[left]["q"], samples[right]["q"], ratio)
 
@@ -72,14 +68,16 @@ def validate_action(data):
     return result
 
 
-def _recording_frames(rows: list[dict], start: float | None, end: float | None) -> tuple[list[Frame], float, float]:
-    """校验录制状态并按裁剪区间重采样；不读取文件或修改原始数据。"""
+def _recording_frames(rows: list[dict]) -> list[Frame]:
+    """校验整段录制并重采样到 50 Hz，保留起点和最终实测姿态。"""
     samples = []
     last_time = float("-inf")
     for row in rows:
         t = float(row["t"])
         if not math.isfinite(t) or t <= last_time or t < 0:
             raise ValueError("录制时间必须为严格递增的非负有限值")
+        if samples and t - last_time > MAX_SOURCE_GAP:
+            raise ValueError("录制中存在超过 0.1 秒的状态缺口")
         samples.append(
             {
                 "t": t,
@@ -90,29 +88,25 @@ def _recording_frames(rows: list[dict], start: float | None, end: float | None) 
             }
         )
         last_time = t
-    start = samples[0]["t"] if start is None else float(start)
-    end = samples[-1]["t"] if end is None else float(end)
-    if not math.isfinite(start) or not math.isfinite(end) or end - start < 2 * DT - 1e-9:
-        raise ValueError("裁剪时间无效，动作至少需要三帧")
+    duration = samples[-1]["t"] - samples[0]["t"]
+    if duration < 2 * DT - 1e-9:
+        raise ValueError("录制时长不足，动作至少需要三帧")
     times = [row["t"] for row in samples]
-    if start < times[0] or end > times[-1]:
-        raise ValueError("裁剪时间超出录制范围")
-    steps = int(math.floor((end - start) / DT + 1e-9))
-    first = max(0, bisect_right(times, start) - 1)
-    last = min(len(samples) - 1, bisect_right(times, start + steps * DT))
-    modes = {(row["mode_pr"], row["mode_machine"]) for row in samples[first : last + 1]}
+    steps = math.ceil(duration / DT - 1e-9)
+    modes = {(row["mode_pr"], row["mode_machine"]) for row in samples}
     if len(modes) != 1:
-        raise ValueError("录制区间内设备模式发生变化")
+        raise ValueError("录制过程中设备模式发生变化")
     if modes != {EXPECTED_MODE}:
         raise ValueError("录制模式不符合 0/5")
-    frames = [{"t": round(i * DT, 6), "q": _interpolate(samples, times, start + i * DT)} for i in range(steps + 1)]
-    return frames, start, end
+    return [
+        {"t": round(i * DT, 6), "q": _interpolate(samples, times, times[-1] if i == steps else times[0] + i * DT)}
+        for i in range(steps + 1)
+    ]
 
 
 def load_action(
     source: str | Path,
-    start: float | None = None,
-    end: float | None = None,
+    *,
     code: str = "recorded.action",
     version: int = 1,
     name: str | None = None,
@@ -124,8 +118,6 @@ def load_action(
     if not isinstance(data, dict):
         raise ValueError("输入必须是录制或动作 JSON 对象")
     if data.get("schema") == ACTION_SCHEMA:
-        if start is not None or end is not None:
-            raise ValueError("裁剪输入须为原始录制文件")
         validate_action(data)
         return data
     if (
@@ -143,7 +135,7 @@ def load_action(
     name = source.stem if name is None else name.strip()
     if type(version) is not int or version <= 0 or not name:
         raise ValueError("动作版本和名称无效")
-    frames, start, end = _recording_frames(rows, start, end)
+    frames = _recording_frames(rows)
     return {
         "schema": ACTION_SCHEMA,
         "kind": "single",
@@ -157,8 +149,6 @@ def load_action(
         "source": {
             "file_name": source.name,
             "sha256": hashlib.sha256(raw).hexdigest(),
-            "start_s": start,
-            "requested_end_s": end,
         },
         "frames": frames,
         "metrics": metrics(frames),

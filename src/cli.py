@@ -29,10 +29,8 @@ def main(argv=None):
     check.add_argument("--seconds", type=int, default=10)
     check.add_argument("--output", required=True)
 
-    build = commands.add_parser("build", help="裁剪录制并保存统一动作文件")
+    build = commands.add_parser("build", help="将整段示教录制转换并保存为统一动作文件")
     build.add_argument("source", help="teach 生成的示教录制 JSON")
-    build.add_argument("--start", type=float, help="源记录中的开始秒数")
-    build.add_argument("--end", type=float, help="源记录中的结束秒数")
     build.add_argument("--code", default="recorded.action", help="语义动作代码")
     build.add_argument("--version", type=int, default=1)
     build.add_argument("--name")
@@ -72,7 +70,7 @@ def main(argv=None):
 
             summary = preflight(args.interface, args.seconds, args.output)
         elif args.command == "build":
-            action = load_action(args.source, args.start, args.end, args.code, args.version, args.name)
+            action = load_action(args.source, code=args.code, version=args.version, name=args.name)
             write_json(action, args.output)
             summary = {
                 "path": args.output,
