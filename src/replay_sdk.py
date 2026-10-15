@@ -47,8 +47,10 @@ class ReplaySdkPort:
         self.sdk, self.clock = sdk, clock
         self.publisher = self.subscriber = self.arm_subscriber = None
         self.lock = Lock()
+        # 手臂关节+body 实时状态
         self.latest = None
         self.commands = 0
+        # 灵巧手实时状态
         self.hand_states: dict[str, dict | None] = {side: None for side in HAND_MOTOR_IDS}
         self.hand_resources = []
         self.hand_publishers = {}

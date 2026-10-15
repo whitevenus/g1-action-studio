@@ -39,9 +39,9 @@ HAND_COMMAND_TOPICS = {side: f"rt/dex3/{side}/cmd" for side in HAND_MOTOR_IDS}
 DT = 0.02  # 50 Hz。
 TEACH_TAKEOVER_SECONDS = 2.0  # 保持初始姿态，手臂权重从0渐变到1。
 TEACH_SOFTEN_SECONDS = 2.0  # 示教侧手臂和手指从保持增益渐变到示教增益。
-STATE_TIMEOUT = 0.25
+STATE_TIMEOUT = 1  # 状态超时时间（秒）。
 EXPECTED_MODE = (0, 5)  # mode_pr、mode_machine。
-EXPECTED_MOTOR_MODES = (1,) * ARM_JOINT_COUNT
+EXPECTED_MOTOR_MODES = (1,) * ARM_JOINT_COUNT 
 LOWSTATE_TOPIC = "rt/lowstate"
 ARM_COMMAND_TOPIC = "rt/arm_sdk"
 

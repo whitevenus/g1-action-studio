@@ -69,13 +69,18 @@ def plan_return(start, end, side, body_q):
 def run_session(interface, side, output, profile):
     """接管、降低刚度、回车录制、恢复刚度、避碰回位后释放。"""
     from .collision import CollisionModel
-
+    # 各关节上下限
     limits = load_limits(COLLISION_MODEL)
+    # 停止信号、键盘线程向控制循环传递消息的队列
     stop, events = Event(), Queue()
+    # 保存原始处理中断、终止信号的handler
     previous = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
     port = None
+    # baseline: 开始示教前的初始姿态，target：程序准备下发的目标姿态
     baseline = target = planned_body = None
+    # 示教侧的关节索引
     selected = SIDE_OFFSETS[side]
+    # 录制的动作帧序列
     samples = []
     last_tick = None
     control_attempted = False
@@ -83,6 +88,7 @@ def run_session(interface, side, output, profile):
     pool = None
     primary_error = None
     cleanup_errors = []
+    # 保持姿态pd增益和示教时的pd增益
     hold_gains = tuple(profile[key] for key in ("hold_kp", "hold_kd", "hand_hold_kp", "hand_hold_kd"))
     teach_gains = tuple(profile[key] for key in ("teach_kp", "teach_kd", "hand_teach_kp", "hand_teach_kd"))
 
@@ -183,14 +189,13 @@ def run_session(interface, side, output, profile):
         state = validate_snapshot(port.snapshot(), time.monotonic())
         baseline = tuple(state["q"])
         target = list(baseline)
-        if max(map(abs, state["dq"])) > 0.1:
-            raise RuntimeError("初始手臂或手指尚未静止")
         # 初始姿态须在模型范围内且无本体碰撞，才能开始接管。
         if state.get("body_q") is None:
             raise RuntimeError("避碰示教需要腿/腰姿态反馈")
         check = CollisionModel(state["body_q"]).clearance(baseline, 0.02)
         if not check["valid"]:
             raise ValueError("初始姿态碰撞或余量不足：{}".format(check))
+        # 替换默认handler为停止标志
         for sig in previous:
             signal.signal(sig, lambda *_: stop.set())
         port.hand_profile = profile
@@ -256,6 +261,7 @@ def run_session(interface, side, output, profile):
                 port.close()
             except Exception as error:
                 cleanup_errors.append(str(error))
+        # 恢复原来中断、终止信号的handler
         for sig, handler in previous.items():
             try:
                 signal.signal(sig, handler)

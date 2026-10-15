@@ -19,7 +19,7 @@ def main(argv=None):
     teach = commands.add_parser("teach", help="Arm7 手把手示教候选；默认只检查参数")
     teach.add_argument("interface", help="DDS 网卡，例如 eth0")
     teach.add_argument("--side", choices=("left", "right"), required=True)
-    teach.add_argument("--output", required=True)
+    teach.add_argument("--output", required=True, help="保存动作文件")
     teach.add_argument("--profile", required=True, help="手臂和手指的保持/示教增益 JSON")
     teach.add_argument("--execute", action="store_true", help="显式开启真机控制与录制")
 

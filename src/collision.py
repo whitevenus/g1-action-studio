@@ -82,11 +82,11 @@ class CollisionModel:
         self.pairs = np.array(self.pairs)
         self.mount_pairs = np.array(self.mount_pairs)
 
-    # 确认双臂关节数目、是有限数值、没有超过关节限位
+    # 确认关节数目、是有限数值、没有超过关节限位
     def validate(self, q):
         q = finite_vector(list(q))
         if any(not low <= value <= high for value, (low, high) in zip(q, self.limits)):
-            raise ValueError("双臂姿态超出碰撞模型关节范围")
+            raise ValueError("关节数目、是有限数值、没有超过关节限位")
         return q
 
     def check_motion(self, frames, margin):
