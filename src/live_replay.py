@@ -44,8 +44,7 @@ def _execute(interface, action, profile, model, speed_scale, side, stop):
     try:
         if not port.wait_ready(5.0, stop):
             raise RuntimeError("等待初始状态超时或操作员已请求停止")
-        state = port.snapshot()
-        validate_snapshot(state, EXPECTED_MOTOR_MODES)
+        state = validate_snapshot(port.snapshot(), EXPECTED_MOTOR_MODES)
         # 接管和最终回位均使用本次反馈，另一侧全程保持此位置。
         if state.get("body_q") is None:
             raise RuntimeError("避碰回放需要腿/腰的当前姿态反馈")

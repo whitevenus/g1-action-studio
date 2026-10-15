@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from g1_action_studio.teach import teach
 from fake_sdk import VirtualClock
@@ -19,7 +19,7 @@ class InteractiveTeachTests(unittest.TestCase):
         initial = json.loads((ROOT / "examples/transition/action-b.json").read_text())["samples"][0]["q"]
         q, writes = list(initial), []
         port = SimpleNamespace(ready=SimpleNamespace(wait=lambda _: True),
-                               check_services=lambda: None, observed_commands=lambda: 0,
+                               check_services=Mock(), observed_commands=lambda: 0,
                                start_publisher=lambda: None, close=lambda: None)
         port.snapshot = lambda: {"at": clock.now, "q": tuple(q), "dq": (0.0,)*14,
                                  "motor_modes": (1,)*14, "mode_pr": 0, "mode_machine": 5,
@@ -71,6 +71,7 @@ class InteractiveTeachTests(unittest.TestCase):
                 self.assertGreater(writes[-1]["weight"], 0)
                 return
             result = teach("unused", "left", 3, output, ROOT/'examples/profiles/soften.json', True)
+        port.check_services.assert_called_once()
         return initial, writes, result, json.loads(output.read_text(encoding='utf-8'))
 
     def test_manual_boundaries_freeze_endpoint_restore_return_then_release(self):

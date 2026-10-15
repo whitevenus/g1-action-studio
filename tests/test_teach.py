@@ -202,6 +202,35 @@ class TeachLifecycleTests(unittest.TestCase):
         self.assertTrue(self.port.closed)
 
 
+    def test_preflight_checks_latest_feedback_once_after_observation(self):
+        self.port.check_services = Mock()
+        original_snapshot = self.port.snapshot
+        checked_at = []
+
+        def snapshot():
+            checked_at.append(self.clock.now)
+            return original_snapshot()
+
+        self.port.snapshot = snapshot
+        self.run_teach()
+        self.port.check_services.assert_called_once()
+        self.assertEqual(checked_at[0], 103.0)
+
+    def test_mode_changed_during_observation_blocks_takeover(self):
+        snapshot = self.port.snapshot
+
+        def changed_mode():
+            state = snapshot()
+            state["motor_modes"] = (0,) * 14
+            return state
+
+        self.port.snapshot = changed_mode
+        with self.assertRaisesRegex(RuntimeError, "电机模式"):
+            self.run_teach()
+        self.assertFalse(self.port.started)
+        self.assertFalse(self.port.writes)
+
+
 class PortCleanupTests(unittest.TestCase):
     def test_wire_command_changes_arm_slots_and_weight_without_hand_commands(self):
         port = SdkArmPort.__new__(SdkArmPort)
@@ -287,7 +316,7 @@ class TeachTests(unittest.TestCase):
         snapshot = {"at": time.monotonic(), "mode_pr": 0,
                     "mode_machine": 5, "motor_modes": (1,) * 14,
                     "q": (0.0,) * 14, "dq": (0.0,) * 14}
-        validate_snapshot(snapshot, (1,) * 14)
+        self.assertIs(validate_snapshot(snapshot), snapshot)
         snapshot["mode_machine"] = 4
         with self.assertRaisesRegex(RuntimeError, "模式"):
             validate_snapshot(snapshot, (1,) * 14)

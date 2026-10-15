@@ -10,7 +10,7 @@ from queue import Queue, Empty
 from concurrent.futures import ThreadPoolExecutor
 
 from .constants import (
-    ARM_COMMAND_TOPIC, ARM_SLOTS, DT, EXPECTED_MODE, JOINT_NAMES, LEFT, LOWSTATE_TOPIC, PROFILE,
+    ARM_COMMAND_TOPIC, ARM_SLOTS, DT, EXPECTED_MODE, EXPECTED_MOTOR_MODES, JOINT_NAMES, LEFT, LOWSTATE_TOPIC, PROFILE,
     RECORDING_SCHEMA, RIGHT, STATE_TIMEOUT, WEIGHT_SLOT,
 )
 from .config import load_teach_profile as load_profile, write_json
@@ -18,8 +18,8 @@ from .unitree_binding import (arm_snapshot, close_channels, create_service_clien
                              read_arm_service, read_control_state)
 
 
-def validate_snapshot(snapshot, baseline_modes):
-    """每次发布前核对状态；任何不确定情况都停止示教。"""
+def validate_snapshot(snapshot, baseline_modes=EXPECTED_MOTOR_MODES) -> dict:
+    """校验并返回有效状态；失败时抛异常，不返回 None。"""
     if snapshot is None:
         raise RuntimeError("rt/lowstate 已超时")
     if (len(snapshot["q"]) != len(ARM_SLOTS)
@@ -35,6 +35,7 @@ def validate_snapshot(snapshot, baseline_modes):
         raise RuntimeError("手臂电机模式已改变")
     if not all(math.isfinite(x) for x in list(snapshot["q"]) + list(snapshot["dq"])):
         raise RuntimeError("关节状态包含非有限数")
+    return snapshot
 
 
 class SdkArmPort:
@@ -160,7 +161,8 @@ def teach(interface, side, seconds, output, profile_path, execute=False, target_
     release_sent = True
     primary_error = None
     cleanup_errors = []
-    start_q = modes = None
+    start_q = None
+    modes = EXPECTED_MOTOR_MODES
     trial_metrics = {}
 
     def observe(snapshot, targets, name):
@@ -182,8 +184,7 @@ def teach(interface, side, seconds, output, profile_path, execute=False, target_
         nonlocal last_weight, last_kp, last_kd
         if stop.is_set():
             raise RuntimeError("操作员已请求停止")
-        snapshot = port.snapshot()
-        validate_snapshot(snapshot, modes)
+        snapshot = validate_snapshot(port.snapshot(), modes)
         # 接管/保持固定双臂目标；仅低刚度示教阶段更新示教侧目标。
         targets = list(start_q)
         if follow_measured:
@@ -216,22 +217,12 @@ def teach(interface, side, seconds, output, profile_path, execute=False, target_
         port = SdkArmPort(interface)
         if not port.ready.wait(5):
             raise RuntimeError("五秒内未收到 rt/lowstate")
-        port.check_services()
-        start = port.snapshot()
-        if start is None or time.monotonic() - start["at"] > STATE_TIMEOUT:
-            raise RuntimeError("初始关节状态已过期")
-        modes = start["motor_modes"]
-        if any(mode != 1 for mode in modes):
-            raise RuntimeError("手臂电机模式不全为 1")
-        # 核对状态时效、模式、关节数量及数值有效性。
-        validate_snapshot(start, modes)
         print("执行前观测 rt/arm_sdk 3 秒……", flush=True)
         time.sleep(3)
         if port.observed_commands():
             raise RuntimeError("观测到其他手臂命令；不接管")
         port.check_services()
-        start = port.snapshot()
-        validate_snapshot(start, modes)
+        start = validate_snapshot(port.snapshot(), modes)
         start_q = start["q"]
         selected = LEFT if side == "left" else RIGHT
         # 注册停止信号处理器，然后创建发布者
@@ -262,12 +253,10 @@ def teach(interface, side, seconds, output, profile_path, execute=False, target_
             try:
                 if last_weight > 0:
                     # 只采一次释放目标；后续反馈用于检查，不能让目标随下沉移动。
-                    snapshot = port.snapshot()
-                    validate_snapshot(snapshot, modes)
+                    snapshot = validate_snapshot(port.snapshot(), modes)
                     release_q = tuple(snapshot["q"])
                     for step in range(101):
-                        snapshot = port.snapshot()
-                        validate_snapshot(snapshot, modes)
+                        snapshot = validate_snapshot(port.snapshot(), modes)
                         observe(snapshot, release_q, "释放")
                         ratio = min(step / 50, 1.0)
                         gain = last_kp + (profile["hold_kp"] - last_kp) * ratio
@@ -340,7 +329,8 @@ def record_session(interface, side, output, profile):
     stop, events = Event(), Queue()
     previous = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
     port = None
-    baseline = modes = target = planned_body = None
+    baseline = target = planned_body = None
+    modes = EXPECTED_MOTOR_MODES
     selected = range(7) if side == "left" else range(7, 14)
     samples = []
     last_tick = None
@@ -355,8 +345,7 @@ def record_session(interface, side, output, profile):
         now = time.monotonic()
         if last_tick is not None and now - last_tick > 0.1:
             raise RuntimeError("示教控制周期超时")
-        state = port.snapshot()
-        validate_snapshot(state, modes)
+        state = validate_snapshot(port.snapshot(), modes)
         if any(not low <= q <= high for q, (low, high) in zip(state["q"], limits)):
             raise RuntimeError("反馈角度超出关节范围")
         if planned_body is not None:
@@ -392,18 +381,11 @@ def record_session(interface, side, output, profile):
         port = SdkArmPort(interface)
         if not port.ready.wait(5):
             raise RuntimeError("等待初始状态超时")
-        port.check_services()
-        state = port.snapshot()
-        modes = state["motor_modes"] if state else ()
-        validate_snapshot(state, modes)
-        if modes != (1,) * 14:
-            raise RuntimeError("手臂电机模式不符合条件")
         time.sleep(3)
         if port.observed_commands():
             raise RuntimeError("观测到其他手臂命令；不接管")
         port.check_services()
-        state = port.snapshot()
-        validate_snapshot(state, modes)
+        state = validate_snapshot(port.snapshot(), modes)
         baseline = tuple(state["q"])
         target = list(baseline)
         if max(map(abs, state["dq"])) > 0.1:
@@ -440,7 +422,7 @@ def record_session(interface, side, output, profile):
         # 最后一帧已冻结 target；恢复增益时不再追随手动移动。
         stage = "恢复刚度"
         ramp(1, 1, 1, profile["teach_kp"], profile["hold_kp"], profile["teach_kd"], profile["hold_kd"])
-        state = port.snapshot()
+        state = validate_snapshot(port.snapshot(), modes)
         planned_body = state.get("body_q")
         if planned_body is None:
             raise RuntimeError("避碰回位需要腿/腰姿态反馈")
