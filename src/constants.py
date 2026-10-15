@@ -2,19 +2,31 @@
 
 from pathlib import Path
 
-PROFILE = "unitree-g1-arm7-29dof"
+PROFILE = "unitree-g1-arm7-dex3-1"
 ARM_SLOTS = tuple(range(15, 29))
 ARM_JOINT_COUNT = len(ARM_SLOTS)
 LEFT = ARM_SLOTS[:ARM_JOINT_COUNT // 2]
 RIGHT = ARM_SLOTS[ARM_JOINT_COUNT // 2:]
-ARM_OFFSETS = {"left": range(len(LEFT)), "right": range(len(LEFT), ARM_JOINT_COUNT)}
 WEIGHT_SLOT = 29  # SDK 控制权重，不是物理关节。
-JOINT_NAMES = (
+ARM_JOINT_NAMES = (
     "left_shoulder_pitch", "left_shoulder_roll", "left_shoulder_yaw",
     "left_elbow", "left_wrist_roll", "left_wrist_pitch", "left_wrist_yaw",
     "right_shoulder_pitch", "right_shoulder_roll", "right_shoulder_yaw",
     "right_elbow", "right_wrist_roll", "right_wrist_pitch", "right_wrist_yaw",
 )
+HAND_JOINT_NAMES = tuple(f"{side}_hand_{finger}_{index}"
+                         for side in ("left", "right")
+                         for finger, count in (("thumb", 3), ("middle", 2), ("index", 2))
+                         for index in range(count))
+# 动作统一顺序：左臂7、右臂7、左手7、右手7；手部顺序跟模型名称，不跟DDS槽位。
+JOINT_NAMES = ARM_JOINT_NAMES + HAND_JOINT_NAMES
+JOINT_COUNT = len(JOINT_NAMES)
+SIDE_OFFSETS = {"left": (*range(7), *range(14, 21)),
+                "right": (*range(7, 14), *range(21, 28))}
+HAND_MOTOR_IDS = {"left": (0, 1, 2, 3, 4, 5, 6),
+                  "right": (0, 1, 2, 5, 6, 3, 4)}
+HAND_STATE_TOPICS = {side: f"rt/dex3/{side}/state" for side in HAND_MOTOR_IDS}
+HAND_COMMAND_TOPICS = {side: f"rt/dex3/{side}/cmd" for side in HAND_MOTOR_IDS}
 
 DT = 0.02  # 50 Hz。
 STATE_TIMEOUT = 0.25
@@ -23,10 +35,10 @@ EXPECTED_MOTOR_MODES = (1,) * ARM_JOINT_COUNT
 LOWSTATE_TOPIC = "rt/lowstate"
 ARM_COMMAND_TOPIC = "rt/arm_sdk"
 
-RECORDING_SCHEMA = "g1-arm7-state-recording-v1"
-ACTION_SCHEMA = "g1-arm7-action-v1"
-PLAN_SCHEMA = "g1-arm7-offline-replay-plan-v1"
-PROFILE_SCHEMA = "g1-arm7-teach-profile-v1"
+RECORDING_SCHEMA = "g1-arm7-dex3-state-recording-v1"
+ACTION_SCHEMA = "g1-arm7-dex3-action-v1"
+PLAN_SCHEMA = "g1-arm7-dex3-offline-replay-plan-v1"
+PROFILE_SCHEMA = "g1-arm7-dex3-teach-profile-v1"
 RESOURCES = Path(__file__).resolve().parent / "resources"
-DEFAULT_MODEL = RESOURCES / "g1_arm7_limits.xml"
 COLLISION_MODEL = RESOURCES / "collision/g1_arm7_dex3.xml"
+DEFAULT_MODEL = COLLISION_MODEL

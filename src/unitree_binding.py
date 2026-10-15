@@ -73,6 +73,12 @@ def close_channels(port):
                 errors.append("{}：{}".format(name, error))
             finally:
                 setattr(port, name, None)
+    for resource in getattr(port, "hand_resources", []):
+        try:
+            resource.Close()
+        except Exception as error:
+            errors.append("手部通道：{}".format(error))
+    port.hand_resources = []
     return errors
 
 
@@ -80,14 +86,16 @@ class UnitreeReplaySDK:
     def __init__(self):
         from unitree_sdk2py.idl.default import (
             unitree_hg_msg_dds__LowCmd_, unitree_hg_msg_dds__LowState_,
+            unitree_hg_msg_dds__HandCmd_,
         )
-        from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_
+        from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_, HandCmd_, HandState_
         from unitree_sdk2py.utils.crc import CRC
         from unitree_sdk2py.core import channel
 
         # 类型交给 Channel，默认工厂只负责构造带 35 个电机槽位的实例。
         self.LowCmdType, self.LowStateType = LowCmd_, LowState_
         self.LowCmd, self.LowState = unitree_hg_msg_dds__LowCmd_, unitree_hg_msg_dds__LowState_
+        self.HandCmd, self.HandCmdType, self.HandStateType = unitree_hg_msg_dds__HandCmd_, HandCmd_, HandState_
         self.CRC = CRC
         self.channel = channel
         self.service_clients = None

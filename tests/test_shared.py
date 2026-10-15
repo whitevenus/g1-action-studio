@@ -1,5 +1,5 @@
 """公共实现的行为回归：数值、参数快照与输出不覆盖。"""
-
+from g1_action_studio.constants import JOINT_NAMES
 import io
 import json
 import unittest
@@ -14,26 +14,26 @@ from g1_action_studio.trajectory import hold_other_arm, joint_motion, metrics
 
 class SharedBehaviorTests(unittest.TestCase):
     def test_joint_differences_and_screening_agree(self):
-        frames = [{"t": i * DT, "q": [value] + [0.0] * 13, "phase": "replay"}
+        frames = [{"t": i * DT, "q": [value] + [0.0] * 27, "phase": "replay"}
                   for i, value in enumerate((0.0, 0.002, 0.006))]
         motion = joint_motion(frames)
         self.assertEqual(motion[0][0], (0.0, 0.002, 0.006))
         self.assertAlmostEqual(motion[0][1][0], 0.1)
         self.assertAlmostEqual(motion[0][1][1], 0.2)
         self.assertAlmostEqual(motion[0][2][0], 5.0)
-        result = screen_schedule(frames, [(-1, 1)] * 14, 0.15, 4.0)
+        result = screen_schedule(frames, [(-1, 1)] * 28, 0.15, 4.0)
         self.assertEqual(result["metrics"], metrics(frames))
         self.assertEqual([(v["kind"], v["t"]) for v in result["violations"]],
                          [("velocity", 0.04), ("acceleration", 0.04)])
 
     def test_single_arm_planning_preserves_input_and_holds_opposite_side(self):
-        frames = [{"t": 0.0, "q": [0.1] * 14}, {"t": DT, "q": [0.2] * 14}]
+        frames = [{"t": 0.0, "q": [0.1] * 28}, {"t": DT, "q": [0.2] * 28}]
         original = json.loads(json.dumps(frames))
-        baseline = [0.3] * 7 + [0.4] * 7
+        baseline = [0.3] * 7 + [0.4] * 7 + [0.5] * 7 + [0.6] * 7
         left = hold_other_arm(frames, baseline, "left")
         right = hold_other_arm(frames, baseline, "right")
-        self.assertEqual(left[1]["q"], [0.2] * 7 + [0.4] * 7)
-        self.assertEqual(right[1]["q"], [0.3] * 7 + [0.2] * 7)
+        self.assertEqual(left[1]["q"], [0.2] * 7 + [0.4] * 7 + [0.2] * 7 + [0.6] * 7)
+        self.assertEqual(right[1]["q"], [0.3] * 7 + [0.2] * 7 + [0.5] * 7 + [0.2] * 7)
         self.assertEqual(frames, original)
 
     def test_replay_profile_uses_one_snapshot_for_gain_and_executor_checks(self):

@@ -7,7 +7,7 @@ import re
 from bisect import bisect_right
 from pathlib import Path
 
-from .constants import ACTION_SCHEMA, ARM_OFFSETS, ARM_SLOTS, DT, EXPECTED_MODE, JOINT_NAMES, PROFILE, RECORDING_SCHEMA
+from .constants import ACTION_SCHEMA, SIDE_OFFSETS, ARM_SLOTS, DT, EXPECTED_MODE, JOINT_NAMES, PROFILE, RECORDING_SCHEMA
 from .trajectory import finite_vector, frame_digest, interpolate_positions, metrics
 
 MAX_SOURCE_GAP = 0.10
@@ -31,6 +31,7 @@ def _interpolate(samples, times, moment):
 def validate_action(data):
     if (not isinstance(data, dict) or data.get("schema") != ACTION_SCHEMA
             or data.get("target_profile") != PROFILE or data.get("arm_slots") != list(ARM_SLOTS)
+            or data.get("joint_names") != list(JOINT_NAMES)
             or data.get("kind") not in ("single", "sequence") or type(data.get("synthetic")) is not bool):
         raise ValueError("不是本项目的统一动作文件")
     code = data.get("action_code")
@@ -41,7 +42,7 @@ def validate_action(data):
         raise ValueError("动作代码、版本或名称无效")
     if data["kind"] == "sequence":
         collision = data.get("collision")
-        if data.get("side") not in ARM_OFFSETS or not isinstance(collision, dict):
+        if data.get("side") not in SIDE_OFFSETS or not isinstance(collision, dict):
             raise ValueError("组合动作缺少回放侧或碰撞规划参数")
         body = collision.get("body_q")
         margin = collision.get("clearance_m")
@@ -68,7 +69,7 @@ def load_action(source, start=None, end=None, code="recorded.action", version=1,
         validate_action(data)
         return data
     if (data.get("schema") != RECORDING_SCHEMA or data.get("target_profile") != PROFILE
-            or data.get("arm_slots") != list(ARM_SLOTS)):
+            or data.get("arm_slots") != list(ARM_SLOTS) or data.get("joint_names") != list(JOINT_NAMES)):
         raise ValueError("不支持的录制或动作格式")
     rows = data.get("samples")
     if not isinstance(rows, list) or len(rows) < 3:

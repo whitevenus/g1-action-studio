@@ -32,7 +32,7 @@ class TransitionTests(unittest.TestCase):
         collision = self.model.clearance(middle)
         self.assertFalse(collision['valid'])
         self.assertLess(collision['distance_m'], 0)
-        self.assertIn('pelvis_collision', collision['pair'])
+        self.assertIn('left_hip_pitch_link_collision', collision['pair'])
         self.assertFalse(self.model.edge_clear(self.a,self.b,.02))
 
     def test_interval_check_finds_collision_away_from_midpoint(self):
@@ -43,7 +43,7 @@ class TransitionTests(unittest.TestCase):
     def test_right_arm_can_detour_with_left_arm_fixed(self):
         def mirror(q):
             signs=[1,-1,-1,1,-1,1,-1]
-            return [v*s for v,s in zip(q[7:],signs)]+[v*s for v,s in zip(q[:7],signs)]
+            return [v*s for v,s in zip(q[7:14],signs)]+[v*s for v,s in zip(q[:7],signs)]+[0.0]*14
         a,b=mirror(self.a),mirror(self.b)
         path=find_path(self.model,a,b,'right')
         self.assertGreater(len(path),2)
@@ -56,7 +56,7 @@ class TransitionTests(unittest.TestCase):
         self.assertEqual(path[0],self.a)
         self.assertEqual(path[-1],self.b)
         for a,b in zip(path,path[1:]):
-            self.assertEqual(a[7:],self.a[7:])
+            self.assertEqual(a[7:14]+a[21:],self.a[7:14]+self.a[21:])
             self.assertTrue(self.model.edge_clear(a,b,.02))
         frames = parameterize_path(path,.5,2)
         values = metrics(frames)
@@ -69,6 +69,19 @@ class TransitionTests(unittest.TestCase):
     def test_clear_direct_path_needs_no_search(self):
         end=list(self.b);end[0]-=.03
         self.assertEqual(find_path(self.model,self.b,end,'left',timeout=0),[self.b,end])
+
+    def test_initial_baseline_tuple_and_finger_fk_are_supported(self):
+        self.assertTrue(self.model.clearance(tuple(self.b))['valid'])
+        geom = self.model.model.geom('left_hand_thumb_2_link_collision').id
+        self.model._position(self.b)
+        before = self.model.data.geom_xpos[geom].copy()
+        q = list(self.b)
+        q[15] += .1
+        self.model._position(q)
+        self.assertGreater(float(self.model.np.linalg.norm(self.model.data.geom_xpos[geom]-before)), .001)
+        motion = parameterize_path(find_path(self.model,self.b,q,'left'), .5, 2.)
+        self.model.check_motion(motion,.02)
+        self.assertEqual(motion[-1]['q'],q)
 
     def test_approximate_solution_is_not_accepted_as_a_complete_path(self):
         from ompl import geometric as og
@@ -91,10 +104,11 @@ class TransitionTests(unittest.TestCase):
         with self.assertRaises(ValueError):parameterize_path([self.a,self.b],float('nan'),2)
         with self.assertRaises(ValueError):CollisionModel([0]*14)
 
-    def test_finger_envelopes_and_both_arms_are_included(self):
+    def test_official_fingers_and_both_arms_are_included_without_envelopes(self):
         m=self.model.model
         names=[m.geom(i).name for i in range(m.ngeom)]
-        self.assertEqual(sum(n.endswith('_sweep') for n in names),6)
+        self.assertEqual(sum(n.endswith('_sweep') for n in names),0)
+        self.assertEqual(len(self.model.joints),28)
         self.assertIn('head_link_collision',names)
         self.assertIn('left_hand_palm_link_collision',names)
         self.assertIn('right_hand_palm_link_collision',names)
@@ -104,7 +118,8 @@ class TransitionTests(unittest.TestCase):
             if na.startswith('left_') and nb.startswith('right_'):
                 cross_arm.append((na,nb))
                 self.assertFalse(mount)
-        self.assertIn(('left_hand_thumb_sweep','right_hand_thumb_sweep'),cross_arm)
+        self.assertIn(('left_hand_thumb_2_link_collision','right_hand_thumb_2_link_collision'),cross_arm)
+        self.assertFalse(any(m.geom_group[a] == 1 or m.geom_group[b] == 1 for a,b in self.model.pairs))
 
     def test_complete_transition_outputs_uniform_loadable_action(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as directory:

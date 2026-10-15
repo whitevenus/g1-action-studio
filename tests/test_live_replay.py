@@ -1,3 +1,4 @@
+from g1_action_studio.constants import JOINT_NAMES
 import contextlib
 import io
 import hashlib
@@ -37,10 +38,10 @@ class LiveReplayTests(unittest.TestCase):
         for i in range(51):
             q = list(self.safe)
             q[3] += 0.002 * i
-            samples.append({"t": i * 0.02, "q": q, "dq": [0.1] * 14,
+            samples.append({"t": i * 0.02, "q": q, "dq": [0.1] * 28,
                             "mode_pr": 0, "mode_machine": 5})
-        self.source.write_text(json.dumps({"schema": "g1-arm7-state-recording-v1",
-            "target_profile": PROFILE, "arm_slots": list(ARM_SLOTS), "samples": samples}), encoding="utf-8")
+        self.source.write_text(json.dumps({"schema": "g1-arm7-dex3-state-recording-v1",
+            "target_profile": PROFILE, "arm_slots": list(ARM_SLOTS), "joint_names": list(JOINT_NAMES), "samples": samples}), encoding="utf-8")
         candidate = Path(__file__).parents[1] / "examples/profiles/replay.json"
         self.profile_path.write_text(candidate.read_text(encoding="utf-8"), encoding="utf-8")
         from g1_action_studio.replay import DEFAULT_MODEL
@@ -126,7 +127,7 @@ class LiveReplayTests(unittest.TestCase):
 
     def test_live_baseline_outside_model_closes_without_creating_publisher(self):
         clock = VirtualClock()
-        sdk = SimulatedSDK(clock, [4.0] * 14)
+        sdk = SimulatedSDK(clock, [4.0] * 28)
         with patch("g1_action_studio.live_replay._make_sdk", return_value=sdk), \
                 patch("g1_action_studio.teach.time", clock), \
                 patch("g1_action_studio.live_replay.time", clock):
@@ -159,21 +160,21 @@ class LiveReplayTests(unittest.TestCase):
 
 class RetimeTests(unittest.TestCase):
     def test_moving_endpoint_has_small_stop_junction_without_changing_path_endpoints(self):
-        source = [{"t": i * 0.02, "q": [i * 0.002] * 14} for i in range(51)]
+        source = [{"t": i * 0.02, "q": [i * 0.002] * 28} for i in range(51)]
         motion = retime_frames(source, 0.5)
         self.assertEqual(motion[0]["q"], source[0]["q"])
         self.assertEqual(motion[-1]["q"], source[-1]["q"])
         self.assertEqual(motion[-1]["t"], 2.0)
         self.assertTrue(all(a["q"][0] <= b["q"][0] for a, b in zip(motion, motion[1:])))
-        original, _ = build_schedule(source, [0.0] * 14)
-        prepared, _ = build_schedule(motion, [0.0] * 14)
-        before = screen_schedule(original, [(-2, 2)] * 14, 1, 1)
-        after = screen_schedule(prepared, [(-2, 2)] * 14, 1, 1)
+        original, _ = build_schedule(source, [0.0] * 28)
+        prepared, _ = build_schedule(motion, [0.0] * 28)
+        before = screen_schedule(original, [(-2, 2)] * 28, 1, 1)
+        after = screen_schedule(prepared, [(-2, 2)] * 28, 1, 1)
         self.assertTrue(before["violations"])
         self.assertFalse(after["violations"])
 
     def test_invalid_scale_is_rejected(self):
-        frames = [{"t": i * 0.02, "q": [0.0] * 14} for i in range(3)]
+        frames = [{"t": i * 0.02, "q": [0.0] * 28} for i in range(3)]
         for scale in (0, -1, 1.1, float("nan"), True):
             with self.subTest(scale=scale), self.assertRaises(ValueError):
                 retime_frames(frames, scale)

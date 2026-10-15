@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "g1-action-studio"
 version = "0.1.0"
-description = "宇树 G1 Arm7 动作预检、录制、示教与回放工具"
+description = "宇树 G1 Arm7 + Dex3-1 拖动示教、动作制作与回放工具"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {file = "LICENSE"}

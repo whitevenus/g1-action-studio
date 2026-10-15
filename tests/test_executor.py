@@ -1,3 +1,4 @@
+from g1_action_studio.constants import JOINT_NAMES
 import copy
 import math
 import sys
@@ -14,14 +15,14 @@ from fake_sdk import SIMULATION_PROFILE, SimulatedSDK, VirtualClock, simulate_re
 
 
 def make_plan():
-    source = [{"t": round(i * 0.02, 6), "q": [0.0] * 14} for i in range(101)]
+    source = [{"t": round(i * 0.02, 6), "q": [0.0] * 28} for i in range(101)]
     for i, frame in enumerate(source):
         frame["q"][3] = 0.1 * math.sin(math.pi * i / 100) ** 2
-    frames, phases = build_schedule(source, [0.0] * 14, takeover=0.5, enter=1, return_seconds=1, release=0.5)
-    return {"schema": "g1-arm7-offline-replay-plan-v1", "target_profile": PROFILE,
-            "arm_slots": list(ARM_SLOTS), "hardware_enabled": False,
+    frames, phases = build_schedule(source, [0.0] * 28, takeover=0.5, enter=1, return_seconds=1, release=0.5)
+    return {"schema": "g1-arm7-dex3-offline-replay-plan-v1", "target_profile": PROFILE,
+            "arm_slots": list(ARM_SLOTS), "joint_names": list(JOINT_NAMES), "hardware_enabled": False,
             "qualification": "offline_only_not_executable", "status": "offline_numerical_pass",
-            "baseline": {"q": [0.0] * 14}, "model": {"limits_rad": load_limits(DEFAULT_MODEL)},
+            "baseline": {"q": [0.0] * 28}, "model": {"limits_rad": load_limits(DEFAULT_MODEL)},
             "thresholds": {"max_velocity_rad_s": 1, "max_acceleration_rad_s2": 20},
             "frames": frames, "phases": phases, "schedule_sha256": frame_digest(frames)}
 
@@ -31,7 +32,7 @@ class ExecutorTests(unittest.TestCase):
         self.plan = make_plan()
         self.profile = dict(SIMULATION_PROFILE)
         self.clock, self.stop = VirtualClock(), Event()
-        self.sdk = SimulatedSDK(self.clock, [0.0] * 14)
+        self.sdk = SimulatedSDK(self.clock, [0.0] * 28)
         self.port = None
 
     def run_executor(self):
@@ -54,7 +55,7 @@ class ExecutorTests(unittest.TestCase):
         phases = [s["phase"] for s in samples]
         self.assertLess(phases.index("settle"), phases.index("release"))
         self.assertEqual(samples[-1]["weight"], 0)
-        self.assertEqual(samples[-1]["target_q"], [0.0] * 14)
+        self.assertEqual(samples[-1]["target_q"], [0.0] * 28)
         self.assertLess(max(map(abs, self.sdk.q)), self.profile["return_tolerance_rad"])
 
     def test_rejects_plan_before_creating_sdk_port(self):

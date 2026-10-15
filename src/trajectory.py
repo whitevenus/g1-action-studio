@@ -4,12 +4,12 @@ import hashlib
 import json
 import math
 
-from .constants import ARM_JOINT_COUNT, ARM_OFFSETS, DT
+from .constants import JOINT_COUNT, SIDE_OFFSETS, DT
 
 
 def finite_vector(values):
-    if not isinstance(values, list) or len(values) != ARM_JOINT_COUNT:
-        raise ValueError("每帧必须包含全部 14 个双臂关节")
+    if not isinstance(values, list) or len(values) != JOINT_COUNT:
+        raise ValueError("每帧必须包含双臂和双手的全部 28 个关节")
     result = [float(value) for value in values]
     if not all(math.isfinite(value) for value in result):
         raise ValueError("关节数据包含 NaN 或 Infinity")
@@ -33,7 +33,7 @@ def smoothstep(ratio):
 
 def hold_other_arm(frames, baseline, side):
     """只保留选中侧的动作，另一侧统一使用基线位置。"""
-    selected = ARM_OFFSETS[side]
+    selected = SIDE_OFFSETS[side]
     return [{"t": frame["t"], "q": [value if i in selected else baseline[i]
              for i, value in enumerate(frame["q"])]} for frame in frames]
 

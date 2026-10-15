@@ -3,7 +3,7 @@
 import hashlib
 from pathlib import Path
 
-from .constants import ARM_OFFSETS, ARM_SLOTS, COLLISION_MODEL, ACTION_SCHEMA, DT, PROFILE
+from .constants import SIDE_OFFSETS, ARM_SLOTS, COLLISION_MODEL, ACTION_SCHEMA, DT, PROFILE, JOINT_NAMES
 from .author import load_action
 from .config import write_json
 from .trajectory import frame_digest, hold_other_arm, metrics
@@ -23,7 +23,7 @@ def plan_transition(before, after, output, side='left', speed_scale=1.0,
                      for action in actions]
     # 与单臂回放一致：另一侧手臂保持同一起始姿态。
     baseline = first[0]['q']
-    if side not in ARM_OFFSETS:
+    if side not in SIDE_OFFSETS:
         raise ValueError('side 须为 left/right；避碰余量须为 0.001–0.10 米')
     first = hold_other_arm(first, baseline, side)
     second = hold_other_arm(second, baseline, side)
@@ -38,7 +38,7 @@ def plan_transition(before, after, output, side='left', speed_scale=1.0,
         raise ValueError('组合轨迹超过速度/加速度限制：{}'.format(screening['violations']))
     collision = model.check_motion(frames, margin)
     report = {'schema':ACTION_SCHEMA, 'kind':'sequence', 'target_profile':PROFILE,
-              'arm_slots':list(ARM_SLOTS), 'status':'offline_collision_pass',
+              'arm_slots':list(ARM_SLOTS), 'joint_names':list(JOINT_NAMES), 'status':'offline_collision_pass',
               'action_code':'combined.action', 'action_version':1, 'display_name':'组合动作',
               'synthetic':any(action['synthetic'] for action in actions),
               'side':side, 'speed_scale':speed_scale, 'planner':'OMPL RRTConnect',

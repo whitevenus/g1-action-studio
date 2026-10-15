@@ -1,11 +1,15 @@
 {
-  "schema": "g1-arm7-teach-profile-v1",
-  "target_profile": "unitree-g1-arm7-29dof",
+  "schema": "g1-arm7-dex3-teach-profile-v1",
+  "target_profile": "unitree-g1-arm7-dex3-1",
   "intended_stage": "soften",
   "hold_kp": 60.0,
   "hold_kd": 1.5,
   "teach_kp": 20.0,
   "teach_kd": 1.5,
   "qualification": "example_not_hardware_qualified",
-  "notes": "格式与参数示例，未对你的设备验收；不得把示例数值当作通用安全参数。"
+  "notes": "格式与参数示例，未对你的设备验收；不得把示例数值当作通用安全参数。 手指增益独立配置，尚未真机验证可拖动性；手部没有手臂控制权重，结束不代表手部已卸力。",
+  "hand_hold_kp": 1.5,
+  "hand_hold_kd": 0.2,
+  "hand_teach_kp": 0.0,
+  "hand_teach_kd": 0.05
 }

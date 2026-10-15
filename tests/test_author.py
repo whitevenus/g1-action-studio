@@ -1,3 +1,4 @@
+from g1_action_studio.constants import JOINT_NAMES
 import json
 import tempfile
 import unittest
@@ -17,13 +18,13 @@ def source_file(path, *, gap=False, changed_mode=False):
         t = index * 0.02
         if gap and 20 <= index <= 35:
             continue
-        q = [0.0] * 14
+        q = [0.0] * 28
         q[10] = 0.1 * (1 - abs(index - 25) / 25)
-        rows.append({"t": t, "q": q, "dq": [0.0] * 14,
+        rows.append({"t": t, "q": q, "dq": [0.0] * 28,
                      "mode_machine": 6 if changed_mode and index >= 25 else 5,
                      "mode_pr": 0})
-    payload = {"schema": "g1-arm7-state-recording-v1",
-               "target_profile": PROFILE, "arm_slots": list(ARM_SLOTS),
+    payload = {"schema": "g1-arm7-dex3-state-recording-v1",
+               "target_profile": PROFILE, "arm_slots": list(ARM_SLOTS), "joint_names": list(JOINT_NAMES),
                "invalid_messages": 0, "samples": rows}
     path.write_text(json.dumps(payload), encoding="utf-8")
 

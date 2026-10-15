@@ -1,3 +1,4 @@
+from g1_action_studio.constants import JOINT_NAMES
 import json
 import time
 import unittest
@@ -9,10 +10,12 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from g1_action_studio.teach import SdkArmPort, load_profile, teach, validate_snapshot
+from g1_action_studio.replay_sdk import ReplaySdkPort
+from fake_sdk import SimulatedSDK, VirtualClock
 
 
 # 仅用于假端口测试，不是 .165 的候选或已验收增益。
-TEST_PROFILE = {"hold_kp": 12.0, "hold_kd": 1.2,
+TEST_PROFILE = {"hold_kp": 12.0, "hold_kd": 1.2, "hand_hold_kp": 1.5, "hand_hold_kd": .2, "hand_teach_kp": 0.0, "hand_teach_kd": .05,
                 "teach_kp": 2.0, "teach_kd": 0.6}
 
 
@@ -45,8 +48,8 @@ class FakePort:
         self.snapshots += 1
         result = {"at": self.clock.now, "mode_pr": 0, "mode_machine": 5,
                   "motor_modes": (1,) * 14,
-                  "q": (0.2 + self.snapshots * 0.0001,) * 14,
-                  "dq": (0.02,) * 14}
+                  "q": (0.2 + self.snapshots * 0.0001,) * 28,
+                  "dq": (0.02,) * 28}
         if self.invalid and len(self.writes) >= 2:
             key, value = self.invalid
             result[key] = value
@@ -61,7 +64,7 @@ class FakePort:
     def start_publisher(self):
         self.started = True
 
-    def write(self, positions, hold_kp, hold_kd, teach_kp, teach_kd, side, weight):
+    def write(self, positions, hold_kp, hold_kd, teach_kp, teach_kd, side, weight, hand_kp=None, hand_kd=None):
         self.writes.append({"q": tuple(positions), "kp": teach_kp,
                             "kd": teach_kd, "weight": weight})
         if len(self.writes) == self.fail_write:
@@ -126,8 +129,8 @@ class TeachLifecycleTests(unittest.TestCase):
 
     def test_invalid_feedback_blocks_further_commands_and_preserves_both_errors(self):
         cases = (("at", 0.0), ("mode_machine", 4),
-                 ("motor_modes", (0,) * 14), ("q", (float("nan"),) * 14),
-                 ("dq", (float("inf"),) * 14), ("q", (0.0,)))
+                 ("motor_modes", (0,) * 14), ("q", (float("nan"),) * 28),
+                 ("dq", (float("inf"),) * 28), ("q", (0.0,)))
         for invalid in cases:
             with self.subTest(invalid=invalid):
                 self.port.writes.clear()
@@ -139,8 +142,8 @@ class TeachLifecycleTests(unittest.TestCase):
                 self.writer.assert_not_called()
 
     def test_speed_and_offset_are_recorded_without_threshold_rejection(self):
-        for field, value, metric in (("dq", (0.5,) * 14, "max_speed_rad_s"),
-                                     ("q", (2.0,) * 14, "max_start_offset_rad")):
+        for field, value, metric in (("dq", (0.5,) * 28, "max_speed_rad_s"),
+                                     ("q", (2.0,) * 28, "max_start_offset_rad")):
             with self.subTest(field=field):
                 self.port.writes.clear()
                 self.port.invalid = (field, value)
@@ -232,15 +235,15 @@ class TeachLifecycleTests(unittest.TestCase):
 
 
 class PortCleanupTests(unittest.TestCase):
-    def test_wire_command_changes_arm_slots_and_weight_without_hand_commands(self):
+    def test_wire_command_keeps_body_slots_untouched_and_uses_separate_hand_commands(self):
         port = SdkArmPort.__new__(SdkArmPort)
-        command = SimpleNamespace(motor_cmd=[SimpleNamespace(q=0, dq=0, tau=0,
-                                  kp=0, kd=0) for _ in range(35)])
-        port.command_type = lambda: command
-        port.crc = SimpleNamespace(Crc=lambda msg: 1234)
-        port.publisher = Mock()
-        port.publisher.Write.return_value = True
-        port.write([0.25] * 14, 12, 1.2, 2, 0.6, "right", 0.5)
+        clock = VirtualClock()
+        sdk = SimulatedSDK(clock, [0.0]*28)
+        ReplaySdkPort.__init__(port, sdk, clock)
+        port.hand_profile = TEST_PROFILE
+        port.start_publisher()
+        port.write([0.25] * 28, 12, 1.2, 2, 0.6, "right", 0.5, 0, .05)
+        command = sdk.writes[-1]
         self.assertEqual(command.motor_cmd[15].kp, 12)
         self.assertEqual(command.motor_cmd[22].kp, 2)
         self.assertEqual(command.motor_cmd[22].q, 0.25)
@@ -249,7 +252,10 @@ class PortCleanupTests(unittest.TestCase):
         self.assertEqual(command.motor_cmd[29].q, 0.5)
         self.assertEqual(command.motor_cmd[30].q, 0)
         self.assertEqual(command.crc, 1234)
-        port.publisher.Write.assert_called_once_with(command)
+        self.assertEqual(len(sdk.hand_writes), 2)
+        self.assertEqual(sdk.hand_writes[0][1].motor_cmd[0].kp, 1.5)
+        self.assertEqual(sdk.hand_writes[1][1].motor_cmd[0].kp, 0)
+        port.close()
 
     def test_close_attempts_every_resource_even_if_publisher_close_fails(self):
         port = SdkArmPort.__new__(SdkArmPort)
@@ -274,8 +280,8 @@ class PortCleanupTests(unittest.TestCase):
         resource.Close.assert_called_once()
 
     def test_hold_profile_does_not_need_teaching_gains(self):
-        data = {"schema": "g1-arm7-teach-profile-v1",
-                "target_profile": "unitree-g1-arm7-29dof", **TEST_PROFILE}
+        data = {"schema": "g1-arm7-dex3-teach-profile-v1",
+                "target_profile": "unitree-g1-arm7-dex3-1", **TEST_PROFILE}
         del data["teach_kp"], data["teach_kd"]
         with patch.object(Path, "read_text", return_value=json.dumps(data)):
             profile = load_profile("unused", "hold")
@@ -287,9 +293,9 @@ class PortCleanupTests(unittest.TestCase):
 class TeachTests(unittest.TestCase):
     def test_preview_does_not_load_sdk_or_write_output(self):
         data = {
-                "schema": "g1-arm7-teach-profile-v1",
-                "target_profile": "unitree-g1-arm7-29dof",
-                "hold_kp": 12, "hold_kd": 1.2,
+                "schema": "g1-arm7-dex3-teach-profile-v1",
+                "target_profile": "unitree-g1-arm7-dex3-1",
+                "hold_kp": 12, "hold_kd": 1.2, "hand_hold_kp": 1.5, "hand_hold_kd": .2, "hand_teach_kp": 0.0, "hand_teach_kd": .05,
                 "teach_kp": 2, "teach_kd": 0.6,
         }
         with patch.object(Path, "read_text", return_value=json.dumps(data)), \
@@ -303,9 +309,9 @@ class TeachTests(unittest.TestCase):
 
     def test_rejects_unbounded_profile(self):
         data = {
-                "schema": "g1-arm7-teach-profile-v1",
-                "target_profile": "unitree-g1-arm7-29dof",
-                "hold_kp": 100, "hold_kd": 1.2,
+                "schema": "g1-arm7-dex3-teach-profile-v1",
+                "target_profile": "unitree-g1-arm7-dex3-1",
+                "hold_kp": 100, "hold_kd": 1.2, "hand_hold_kp": 1.5, "hand_hold_kd": .2, "hand_teach_kp": 0.0, "hand_teach_kd": .05,
                 "teach_kp": 2, "teach_kd": 0.6,
         }
         with patch.object(Path, "read_text", return_value=json.dumps(data)):
@@ -315,7 +321,7 @@ class TeachTests(unittest.TestCase):
     def test_rejects_stale_or_changed_mode(self):
         snapshot = {"at": time.monotonic(), "mode_pr": 0,
                     "mode_machine": 5, "motor_modes": (1,) * 14,
-                    "q": (0.0,) * 14, "dq": (0.0,) * 14}
+                    "q": (0.0,) * 28, "dq": (0.0,) * 28}
         self.assertIs(validate_snapshot(snapshot), snapshot)
         snapshot["mode_machine"] = 4
         with self.assertRaisesRegex(RuntimeError, "模式"):

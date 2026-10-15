@@ -2,13 +2,6 @@
 
 本项目原创代码采用 MIT 许可，完整文本见 `LICENSE`。第三方许可原文和版权声明保持原样。
 
-## 关节范围
-
-`src/resources/g1_arm7_limits.xml` 仅提取了 `unitreerobotics/unitree_mujoco` 中
-`unitree_robots/g1/g1_29dof.xml` 的 14 个手臂关节名称与范围。
-原始来源采用 BSD-3-Clause 许可，版权声明和完整许可保存在 `LICENSE-UNITREE`。
-这份文件不是完整 MuJoCo 模型，也不是已验收的真机安全范围。
-
 ## 碰撞模型
 
 `src/resources/collision/` 来自[宇树 xr_teleoperate](https://github.com/unitreerobotics/xr_teleoperate)
@@ -16,9 +9,9 @@
 版权所有：2025 HangZhou YuShu TECHNOLOGY CO., LTD.
 原始声明保存在 `LICENSE-UNITREE-MODEL`，Apache-2.0 完整许可见 `LICENSE-APACHE-2.0`。
 
-本项目移除了执行器、自由基座、重复的可视/仿真几何和手指关节；碰撞几何使用凸网格及保守的手指扫掠球。
-基座固定，29 个机体/手臂关节用于正向运动学。
-来源、资源哈希及手指包络半径保存在 `src/resources/collision/provenance.json`。
+本项目固定基座，移除了执行器、传感器、显式惯性和重复几何；保留29个腿腰/手臂关节，恢复14个官方手指关节。
+手指使用官方网格和碰撞几何；拇指中段官方碰撞box与可视网格分开，未添加手指球形包络。
+来源与49份STL哈希保存在 `src/resources/collision/provenance.json`。
 
 ## 真机 SDK
 

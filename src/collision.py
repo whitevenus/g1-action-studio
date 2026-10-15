@@ -1,8 +1,8 @@
-"""固定腿/腰姿态下的双臂碰撞检查；只计算几何，不运行 DDS 或动力学。"""
+"""固定腿/腰姿态下的双臂与双手碰撞检查；只计算几何，不运行 DDS 或动力学。"""
 
 import math
 
-from .constants import ARM_JOINT_COUNT, ARM_OFFSETS, ARM_SLOTS, COLLISION_MODEL, DT, JOINT_NAMES
+from .constants import JOINT_COUNT, SIDE_OFFSETS, COLLISION_MODEL, DT, JOINT_NAMES
 from .trajectory import finite_vector, interpolate_positions, smoothstep
 
 
@@ -18,8 +18,11 @@ class CollisionModel:
         self.data = mujoco.MjData(self.model)
         m = self.model
         self.joints = [m.joint(name + '_joint').id for name in JOINT_NAMES]
+        # 双臂和双手关节的角度存储位置
         self.addresses = m.jnt_qposadr[self.joints]
+        # 双臂和双手关节的限位（copy独立数组）
         self.limits = m.jnt_range[self.joints].copy()
+        # 检查并设置机器人实际的腰、腿姿态
         body_q = [0.0] * 15 if body_q is None else list(body_q)
         if len(body_q) != 15 or not all(math.isfinite(v) for v in body_q):
             raise ValueError('body_q 必须包含 J0–J14 的 15 个有限弧度值')
@@ -28,32 +31,39 @@ class CollisionModel:
                 raise ValueError('腿/腰姿态超出模型范围')
             self.data.qpos[m.jnt_qposadr[joint]] = value
         self.body_q = body_q
+        # 找出所有手臂和手指部件
         arm_bodies = {m.jnt_bodyid[j] for j in self.joints}
+        # 找出特殊安装区域（躯干、肩；肘部、腕部；....），间隙为0
         mount_housings = set()
         for side in ('left', 'right'):
             for a, b in [('torso_link', side + '_shoulder_roll_link'),
                          (side + '_elbow_link', side + '_wrist_pitch_link'),
                          (side + '_wrist_roll_link', side + '_wrist_yaw_link')]:
                 mount_housings.add(frozenset((a + '_collision', b + '_collision')))
+        # 枚举几何体组合
         self.pairs = []
         self.mount_pairs = []
         for a in range(m.ngeom):
             for b in range(a + 1, m.ngeom):
+                if m.geom_group[a] == 1 or m.geom_group[b] == 1:
+                    continue  # 官方可视网格不叠加到对应的碰撞几何上。
+                if m.geom_type[a] == mujoco.mjtGeom.mjGEOM_PLANE or m.geom_type[b] == mujoco.mjtGeom.mjGEOM_PLANE:
+                    continue  # 查看器地板不属于本体几何；无限平面没有有限包围球。
                 ba, bb = m.geom_bodyid[[a, b]]
+                # 两边都不是手臂或手指时，不进行检查。
                 if ba not in arm_bodies and bb not in arm_bodies:
                     continue
                 # 直接相连的关节外壳属于安装区域，不互相检查。
                 if ba == bb or m.body_parentid[ba] == bb or m.body_parentid[bb] == ba:
                     continue
                 names = [m.geom(a).name, m.geom(b).name]
-                # 手指包络覆盖所有角度并伸入本侧腕部，模型不检查手部内部碰撞。
-                if any(n.endswith('_sweep') for n in names) and any('_wrist_' in n for n in names):
-                    if names[0].split('_')[0] == names[1].split('_')[0]:
-                        continue
                 self.pairs.append((a, b))
-                self.mount_pairs.append(frozenset(names) in mount_housings)
+                # 手部内部空间很小，检查穿透，不套用手与躯干之间的2厘米间隙。
+                same_hand = names[0].split('_')[0] == names[1].split('_')[0] and all(
+                    '_hand_' in n or '_wrist_' in n for n in names)
+                self.mount_pairs.append(frozenset(names) in mount_housings or same_hand)
         # 位移上界为半径 × 转角；半径包含网格偏移和所有下游连杆。
-        self.reach = np.zeros((ARM_JOINT_COUNT, m.ngeom))
+        self.reach = np.zeros((JOINT_COUNT, m.ngeom))
         for column, joint in enumerate(self.joints):
             for geom in range(m.ngeom):
                 body = m.geom_bodyid[geom]
@@ -68,8 +78,9 @@ class CollisionModel:
         self.pairs = np.array(self.pairs)
         self.mount_pairs = np.array(self.mount_pairs)
 
+    # 确认双臂关节数目、是有限数值、没有超过关节限位
     def validate(self, q):
-        q = finite_vector(q)
+        q = finite_vector(list(q))
         if any(not low <= value <= high for value, (low, high) in zip(q, self.limits)):
             raise ValueError('双臂姿态超出碰撞模型关节范围')
         return q
@@ -89,6 +100,7 @@ class CollisionModel:
                 raise ValueError("完整动作在 {:.2f}s 帧间无法证明无碰撞".format(frame["t"]))
         return {"minimum_clearance_m": clearance, "minimum_mount_gap_m": mount_gap}
 
+    # 写入双臂关节姿态并进行正向运动学计算各个零部件位置
     def _position(self, q):
         self.data.qpos[self.addresses] = q
         self.mj.mj_kinematics(self.model, self.data)
@@ -144,12 +156,12 @@ def find_path(model, start, end, side, margin=0.02, timeout=5.0):
     except ImportError as error:
         raise ImportError('避碰规划需要 OMPL 2.0.1；请在 Linux Python 3.11 环境安装 .[planning]') from error
     start, end = model.validate(start), model.validate(end)
-    if side not in ARM_OFFSETS or not 0.001 <= margin <= 0.10:
+    if side not in SIDE_OFFSETS or not 0.001 <= margin <= 0.10:
         raise ValueError('side 须为 left/right；避碰余量须为 0.001–0.10 米')
     if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout < 0:
         raise ValueError('规划时间预算须为非负有限数')
-    selected = ARM_OFFSETS[side]
-    if any(start[i] != end[i] for i in range(len(ARM_SLOTS)) if i not in selected):
+    selected = SIDE_OFFSETS[side]
+    if any(start[i] != end[i] for i in range(JOINT_COUNT) if i not in selected):
         raise ValueError('过渡时另一侧手臂必须保持同一姿态')
     for label, q in [('开始', start), ('结束', end)]:
         check = model.clearance(q, margin)

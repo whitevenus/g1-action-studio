@@ -1,5 +1,5 @@
 """实际使用流程：录制直接回放、制作后回放、衔接后回放。"""
-
+from g1_action_studio.constants import JOINT_NAMES
 import contextlib
 import io
 import json
@@ -35,12 +35,12 @@ class ActionFixtures:
         self.source = self.root / "recording.json"
         self.output = self.root / "report.json"
         self.q = json.loads((ROOT / "examples/transition/action-b.json").read_text())["samples"][0]["q"]
-        self.record(self.source, self.q)
+        self.write_recording(self.source, self.q)
 
-    def record(self, path, q, seconds=1.0, synthetic=False):
-        data = {"schema": "g1-arm7-state-recording-v1", "target_profile": PROFILE,
-                "arm_slots": list(ARM_SLOTS), "invalid_messages": 0,
-                "samples": [{"t": round(i * 0.02, 6), "q": list(q), "dq": [0.0] * 14,
+    def write_recording(self, path, q, seconds=1.0, synthetic=False):
+        data = {"schema": "g1-arm7-dex3-state-recording-v1", "target_profile": PROFILE,
+                "arm_slots": list(ARM_SLOTS), "joint_names": list(JOINT_NAMES), "invalid_messages": 0,
+                "samples": [{"t": round(i * 0.02, 6), "q": list(q), "dq": [0.0] * 28,
                              "mode_pr": 0, "mode_machine": 5} for i in range(round(seconds / 0.02) + 1)]}
         if synthetic:
             data["qualification"] = "synthetic_example_not_for_hardware"
@@ -89,7 +89,7 @@ class ActionFlowTests(ActionFixtures, unittest.TestCase):
 
     def test_synthetic_marker_survives_build_and_blocks_execution(self):
         source = self.root / "synthetic.json"
-        self.record(source, self.q, synthetic=True)
+        self.write_recording(source, self.q, synthetic=True)
         action = self.root / "synthetic-action.json"
         write_json(load_action(source), action)
         with patch("g1_action_studio.live_replay._make_sdk") as factory:
@@ -111,8 +111,8 @@ class CombinedFlowTests(ActionFixtures, unittest.TestCase):
         self.assertTrue(model.clearance(self.q)["valid"])
         self.before = self.root / "a.json"
         self.after = self.root / "b.json"
-        self.record(self.before, self.q, seconds=0.1)
-        self.record(self.after, self.q, seconds=0.1)
+        self.write_recording(self.before, self.q, seconds=0.1)
+        self.write_recording(self.after, self.q, seconds=0.1)
 
     def combined(self, side="left"):
         path = self.root / "combined.json"
@@ -151,7 +151,7 @@ class CombinedFlowTests(ActionFixtures, unittest.TestCase):
         from g1_action_studio.collision import CollisionModel
         start = json.loads((ROOT / "examples/transition/action-a.json").read_text())["samples"][0]["q"]
         self.before = self.root / "routed-start.json"
-        self.record(self.before, start, seconds=0.1)
+        self.write_recording(self.before, start, seconds=0.1)
         model = CollisionModel()
         self.assertFalse(model.edge_clear(start, self.q, 0.02))
         action = self.root / "routed.json"

@@ -5,25 +5,25 @@ import signal
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Event, Lock, Thread
+from threading import Event, Thread
 from queue import Queue, Empty
 from concurrent.futures import ThreadPoolExecutor
 
 from .constants import (
-    ARM_COMMAND_TOPIC, ARM_SLOTS, DT, EXPECTED_MODE, EXPECTED_MOTOR_MODES, JOINT_NAMES, LEFT, LOWSTATE_TOPIC, PROFILE,
-    RECORDING_SCHEMA, RIGHT, STATE_TIMEOUT, WEIGHT_SLOT,
+    ARM_SLOTS, DT, EXPECTED_MODE, EXPECTED_MOTOR_MODES, JOINT_NAMES, PROFILE,
+    RECORDING_SCHEMA, STATE_TIMEOUT, JOINT_COUNT, SIDE_OFFSETS,
 )
 from .config import load_teach_profile as load_profile, write_json
-from .unitree_binding import (arm_snapshot, close_channels, create_service_clients,
-                             read_arm_service, read_control_state)
+from .unitree_binding import UnitreeReplaySDK
+from .replay_sdk import ReplaySdkPort
 
 
 def validate_snapshot(snapshot, baseline_modes=EXPECTED_MOTOR_MODES) -> dict:
     """校验并返回有效状态；失败时抛异常，不返回 None。"""
     if snapshot is None:
         raise RuntimeError("rt/lowstate 已超时")
-    if (len(snapshot["q"]) != len(ARM_SLOTS)
-            or len(snapshot["dq"]) != len(ARM_SLOTS)
+    if (len(snapshot["q"]) != JOINT_COUNT
+            or len(snapshot["dq"]) != JOINT_COUNT
             or len(snapshot["motor_modes"]) != len(ARM_SLOTS)):
         raise RuntimeError("手臂状态关节数量不匹配")
     age = time.monotonic() - snapshot["at"]
@@ -38,8 +38,8 @@ def validate_snapshot(snapshot, baseline_modes=EXPECTED_MOTOR_MODES) -> dict:
     return snapshot
 
 
-class SdkArmPort:
-    """DDS 读写边界；实例化后才会创建 rt/arm_sdk 发布者。"""
+class SdkArmPort(ReplaySdkPort):
+    """示教与回放共用手臂/Dex3-1通信和资源清理。"""
 
     def __init__(self, interface):
         self.publisher = self.arm_subscriber = self.subscriber = None
@@ -49,91 +49,25 @@ class SdkArmPort:
             try:
                 self.close()
             except Exception as cleanup_error:
-                raise RuntimeError("初始化失败：{}；关闭通信失败：{}".format(
-                    error, cleanup_error)) from error
+                raise RuntimeError("初始化失败：{}；关闭失败：{}".format(error, cleanup_error)) from error
             raise
 
     def _initialize(self, interface):
-        from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelPublisher, ChannelSubscriber
-        from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_
-        from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_
-        from unitree_sdk2py.utils.crc import CRC
+        sdk = UnitreeReplaySDK()
+        sdk.initialize_network(interface, allow_network=True)
+        sdk.initialize_service_clients()
+        super().__init__(sdk, time)
 
-        ChannelFactoryInitialize(0, interface)
-        self.lock = Lock()
-        self.ready = Event()
-        self.latest = None
-        self.other_commands = 0
-        self.publisher = None
-        self.command_type = unitree_hg_msg_dds__LowCmd_
-        self.message_type = LowCmd_
-        # 进入执行模式后才创建rt/arm_sdk发布者
-        self.publisher_type = ChannelPublisher
-        self.crc = CRC()
-        self.subscriber = ChannelSubscriber(LOWSTATE_TOPIC, LowState_)
-        self.subscriber.Init(self._on_state, 10)
-        self.arm_subscriber = ChannelSubscriber(ARM_COMMAND_TOPIC, LowCmd_)
-        self.arm_subscriber.Init(self._on_arm_command, 10)
-        self.loco, self.switcher, self.robot_state = create_service_clients()
-
-    def _on_state(self, message):
-        if len(message.motor_state) <= ARM_SLOTS[-1]:
-            return
-        snapshot = arm_snapshot(message, time)
-        with self.lock:
-            self.latest = snapshot
-        self.ready.set()
-
-    def _on_arm_command(self, _message):
-        with self.lock:
-            self.other_commands += 1
-
-    def snapshot(self):
-        with self.lock:
-            return self.latest
-
-    def observed_commands(self):
-        with self.lock:
-            return self.other_commands
-
-    def check_services(self):
-        control = read_control_state(self.loco, self.switcher)
-        arm = read_arm_service(self.robot_state)
-        if control != {"motion_service": "ai", "fsm_id": 501}:
-            raise RuntimeError("运控状态不符合本机候选条件：{}".format(control))
-        if arm is None or arm["status"] != 0:
-            raise RuntimeError("g1_arm_example 服务未确认关闭：{}".format(arm))
-        return control, arm
-
-    def start_publisher(self):
-        self.publisher = self.publisher_type(ARM_COMMAND_TOPIC, self.message_type)
-        self.publisher.Init()
-
-    def write(self, positions, hold_kp, hold_kd, teach_kp, teach_kd, side, weight):
-        command = self.command_type()
-        command.mode_pr, command.mode_machine = EXPECTED_MODE
-        selected = LEFT if side == "left" else RIGHT
-        for offset, index in enumerate(ARM_SLOTS):
-            motor = command.motor_cmd[index]
-            motor.q = float(positions[offset])
-            motor.dq = motor.tau = 0.0
-            # 按关节槽位选择示教侧或保持侧的增益（kp：刚度系数、kd：阻尼系数）
-            motor.kp = float(teach_kp if index in selected else hold_kp)
-            motor.kd = float(teach_kd if index in selected else hold_kd)
-        # 槽位 29 是控制权重，不是物理关节。
-        command.motor_cmd[WEIGHT_SLOT].q = float(weight)
-        command.crc = self.crc.Crc(command)
-        if self.publisher.Write(command) is not True:
+    def write(self, positions, hold_kp, hold_kd, teach_kp, teach_kd, side, weight,
+              hand_kp=None, hand_kd=None):
+        if super().write(positions, hold_kp, hold_kd, weight, side=side,
+                         selected_kp=teach_kp, selected_kd=teach_kd,
+                         hand_kp=hand_kp, hand_kd=hand_kd) is not True:
             raise RuntimeError("rt/arm_sdk 命令发送失败")
-
-    def close(self):
-        errors = close_channels(self)
-        if errors:
-            raise RuntimeError("关闭通信失败：" + "；".join(errors))
 
 
 def teach(interface, side, seconds, output, profile_path, execute=False, target_stage="record"):
-    """只在显式执行时创建 DDS 发布者；输出为未验收的状态录制。"""
+    """只在显式执行时创建 DDS 发布者；输出为未验收的示教录制。"""
     if side not in ("left", "right") or not 1 <= seconds <= 30:
         raise ValueError("只支持 left/right 单臂示教，时长为 1–30 秒")
     if target_stage not in ("hold", "soften", "record"):
@@ -157,6 +91,7 @@ def teach(interface, side, seconds, output, profile_path, execute=False, target_
     last_weight = 0.0
     last_kp = profile["hold_kp"]
     last_kd = profile["hold_kd"]
+    last_hand_kp, last_hand_kd = profile["hand_hold_kp"], profile["hand_hold_kd"]
     stage = "初始化"
     release_sent = True
     primary_error = None
@@ -180,8 +115,8 @@ def teach(interface, side, seconds, output, profile_path, execute=False, target_
         stop.set()
 
     # 一次控制周期（读取状态 -> 检查 -> 发指令）
-    def tick(teach_kp, teach_kd, weight, follow_measured=False):
-        nonlocal last_weight, last_kp, last_kd
+    def tick(teach_kp, teach_kd, weight, follow_measured=False, hand_kp=None, hand_kd=None):
+        nonlocal last_weight, last_kp, last_kd, last_hand_kp, last_hand_kd
         if stop.is_set():
             raise RuntimeError("操作员已请求停止")
         snapshot = validate_snapshot(port.snapshot(), modes)
@@ -189,11 +124,13 @@ def teach(interface, side, seconds, output, profile_path, execute=False, target_
         targets = list(start_q)
         if follow_measured:
             for index in selected:
-                targets[index - ARM_SLOTS[0]] = snapshot["q"][index - ARM_SLOTS[0]]
+                targets[index] = snapshot["q"][index]
         observe(snapshot, targets, stage)
         last_weight, last_kp, last_kd = weight, teach_kp, teach_kd
+        last_hand_kp = profile["hand_hold_kp"] if hand_kp is None else hand_kp
+        last_hand_kd = profile["hand_hold_kd"] if hand_kd is None else hand_kd
         port.write(targets, profile["hold_kp"], profile["hold_kd"],
-                   teach_kp, teach_kd, side, weight)
+                   teach_kp, teach_kd, side, weight, last_hand_kp, last_hand_kd)
         return snapshot
 
     # 按时间渐变一个阶段
@@ -207,7 +144,9 @@ def teach(interface, side, seconds, output, profile_path, execute=False, target_
                             kp_start + (kp_end - kp_start) * ratio,
                             kd_start + (kd_end - kd_start) * ratio,
                             weight_start + (weight_end - weight_start) * ratio,
-                            follow_measured)
+                            follow_measured,
+                            profile["hand_hold_kp"] + (profile["hand_teach_kp"]-profile["hand_hold_kp"])*ratio if follow_measured else None,
+                            profile["hand_hold_kd"] + (profile["hand_teach_kd"]-profile["hand_hold_kd"])*ratio if follow_measured else None)
             # 安排下一次循环（尽量维持指定hz）
             delay = began + (step + 1) * DT - time.monotonic()
             if step < steps and delay > 0:
@@ -224,10 +163,11 @@ def teach(interface, side, seconds, output, profile_path, execute=False, target_
         port.check_services()
         start = validate_snapshot(port.snapshot(), modes)
         start_q = start["q"]
-        selected = LEFT if side == "left" else RIGHT
+        selected = SIDE_OFFSETS[side]
         # 注册停止信号处理器，然后创建发布者
         signal.signal(signal.SIGINT, request_stop)
         signal.signal(signal.SIGTERM, request_stop)
+        port.hand_profile = profile
         port.start_publisher()
 
         stage = "接管"
@@ -263,7 +203,9 @@ def teach(interface, side, seconds, output, profile_path, execute=False, target_
                         damping = last_kd + (profile["hold_kd"] - last_kd) * ratio
                         weight = last_weight if step <= 50 else last_weight * (1 - (step - 50) / 50)
                         port.write(release_q, profile["hold_kp"], profile["hold_kd"],
-                                   gain, damping, side, weight)
+                                   gain, damping, side, weight,
+                                   last_hand_kp+(profile["hand_hold_kp"]-last_hand_kp)*ratio,
+                                   last_hand_kd+(profile["hand_hold_kd"]-last_hand_kd)*ratio)
                         if step < 100:
                             time.sleep(DT)
                     print("已请求交还手臂权重；请现场确认手臂和机体状态。", flush=True)
@@ -315,9 +257,8 @@ def read_record_keys(events, stop):
 def plan_return(start, end, side, body_q):
     from .collision import CollisionModel, find_path, parameterize_path
     model = CollisionModel(body_q)
-    motion = parameterize_path(find_path(model, start, end, side), 0.5, 2.0)
-    model.check_motion(motion, 0.02)
-    return motion
+    # 时间参数化沿已验证的路径线段采样，不改变空间路径。
+    return parameterize_path(find_path(model, start, end, side), 0.5, 2.0)
 
 
 def record_session(interface, side, output, profile):
@@ -325,21 +266,23 @@ def record_session(interface, side, output, profile):
     from .trajectory import interpolate_positions, smoothstep
     from .constants import DEFAULT_MODEL
     from .replay import load_limits
+    from .collision import CollisionModel
     limits = load_limits(DEFAULT_MODEL)
     stop, events = Event(), Queue()
     previous = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
     port = None
     baseline = target = planned_body = None
     modes = EXPECTED_MOTOR_MODES
-    selected = range(7) if side == "left" else range(7, 14)
+    selected = SIDE_OFFSETS[side]
     samples = []
     last_tick = None
     weight = 0.0
+    control_attempted = False
     stage = "准备"
     pool = None
 
-    def tick(kp, kd, w, follow=False, capture=False):
-        nonlocal target, weight, last_tick
+    def tick(kp, kd, w, follow=False, capture=False, hand_gains=None):
+        nonlocal target, weight, last_tick, control_attempted
         if stop.is_set():
             raise RuntimeError("操作员已请求停止")
         now = time.monotonic()
@@ -360,20 +303,26 @@ def record_session(interface, side, output, profile):
         if max(abs(a - b) for a, b in zip(state["q"], target)) > 0.15:
             raise RuntimeError("示教保持或回位跟踪误差超限")
         weight, last_tick = w, now
-        port.write(target, profile["hold_kp"], profile["hold_kd"], kp, kd, side, w)
+        if hand_gains is None:
+            hand_gains = (profile["hand_teach_kp"], profile["hand_teach_kd"]) if follow else (profile["hand_hold_kp"], profile["hand_hold_kd"])
+        control_attempted = True
+        port.write(target, profile["hold_kp"], profile["hold_kd"], kp, kd, side, w, *hand_gains)
         if capture:
             samples.append({"t": round(now - capture_start, 6), "q": list(state["q"]),
                             "dq": list(state["dq"]), "mode_pr": state["mode_pr"],
                             "mode_machine": state["mode_machine"]})
         return state
 
-    def ramp(seconds, w0, w1, kp0, kp1, kd0, kd1, follow=False):
+    def ramp(seconds, w0, w1, kp0, kp1, kd0, kd1, follow=False, hand_start=None, hand_end=None):
+        hand_start = hand_start or (profile["hand_hold_kp"], profile["hand_hold_kd"])
+        hand_end = hand_end or hand_start
         began = time.monotonic()
         steps = round(seconds / DT)
         for i in range(steps + 1):
             blend = smoothstep(i / steps)
             tick(kp0 + (kp1-kp0)*blend, kd0 + (kd1-kd0)*blend,
-                 w0 + (w1-w0)*blend, follow=follow)
+                 w0 + (w1-w0)*blend, follow=follow,
+                 hand_gains=tuple(a+(b-a)*blend for a,b in zip(hand_start,hand_end)))
             if i < steps:
                 time.sleep(max(0, began + (i+1)*DT - time.monotonic()))
 
@@ -393,12 +342,16 @@ def record_session(interface, side, output, profile):
         # 初始姿态须在模型范围内且无本体碰撞，才能开始接管。
         if state.get("body_q") is None:
             raise RuntimeError("避碰示教需要腿/腰姿态反馈")
-        plan_return(baseline, baseline, side, state["body_q"])
+        check = CollisionModel(state["body_q"]).clearance(baseline, 0.02)
+        if not check["valid"]:
+            raise ValueError("初始姿态碰撞或余量不足：{}".format(check))
         for sig in previous:
             signal.signal(sig, lambda *_: stop.set())
+        port.hand_profile = profile
         port.start_publisher()
         ramp(3, 0, 1, profile["hold_kp"], profile["hold_kp"], profile["hold_kd"], profile["hold_kd"])
-        ramp(3, 1, 1, profile["hold_kp"], profile["teach_kp"], profile["hold_kd"], profile["teach_kd"], True)
+        ramp(3, 1, 1, profile["hold_kp"], profile["teach_kp"], profile["hold_kd"], profile["teach_kd"], True,
+             hand_end=(profile["hand_teach_kp"], profile["hand_teach_kd"]))
         Thread(target=read_record_keys, args=(events, stop), daemon=True).start()
         recording = False
         stage = "等待开始"
@@ -421,7 +374,9 @@ def record_session(interface, side, output, profile):
             time.sleep(DT)
         # 最后一帧已冻结 target；恢复增益时不再追随手动移动。
         stage = "恢复刚度"
-        ramp(1, 1, 1, profile["teach_kp"], profile["hold_kp"], profile["teach_kd"], profile["hold_kd"])
+        ramp(1, 1, 1, profile["teach_kp"], profile["hold_kp"], profile["teach_kd"], profile["hold_kd"],
+             hand_start=(profile["hand_teach_kp"], profile["hand_teach_kd"]),
+             hand_end=(profile["hand_hold_kp"], profile["hand_hold_kd"]))
         state = validate_snapshot(port.snapshot(), modes)
         planned_body = state.get("body_q")
         if planned_body is None:
@@ -465,7 +420,7 @@ def record_session(interface, side, output, profile):
         stage = "释放"
         ramp(2, 1, 0, profile["hold_kp"], profile["hold_kp"], profile["hold_kd"], profile["hold_kd"])
     except BaseException as error:
-        if weight > 0:
+        if control_attempted:
             raise RuntimeError("示教在{}阶段停止：{}；未自动释放，请现场接管".format(stage, error)) from error
         raise
     finally:
@@ -487,4 +442,6 @@ def record_session(interface, side, output, profile):
                "messages_received": len(samples), "invalid_messages": 0, "samples": samples}
     write_json(payload, output)
     return {"path": str(output), "samples": len(samples), "release_sent": True,
+            "hand_release_sent": False,
+            "hand_finish": "已发送初始手型保持目标；关闭发布器不证明手指已卸力或保持",
             "duration_s": samples[-1]["t"], "qualification": payload["qualification"]}

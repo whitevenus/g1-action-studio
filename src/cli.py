@@ -1,4 +1,4 @@
-"""G1 动作预检、录制、示教和回放的命令行入口。"""
+"""G1 动作预检、示教、制作和回放的命令行入口。"""
 
 import argparse
 import json
@@ -11,14 +11,9 @@ from . import __version__
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="g1-action-studio", description="G1 Arm7 动作制作工具；teach/replay --execute 会发送手臂命令")
+    parser = argparse.ArgumentParser(prog="g1-action-studio", description="G1 Arm7 + Dex3-1 动作制作工具；teach/replay --execute 会发送手臂和手指命令")
     parser.add_argument("--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", required=True)
-
-    capture = commands.add_parser("record", help="只读记录 rt/lowstate")
-    capture.add_argument("interface", help="DDS 网卡，例如 eth0")
-    capture.add_argument("--seconds", type=int, required=True)
-    capture.add_argument("--output", required=True)
 
     teach = commands.add_parser("teach", help="Arm7 手把手示教候选；默认只检查参数")
     teach.add_argument("interface", help="DDS 网卡，例如 eth0")
@@ -36,7 +31,7 @@ def main(argv=None):
     check.add_argument("--output", required=True)
 
     build = commands.add_parser("build", help="裁剪录制并保存统一动作文件")
-    build.add_argument("source", help="record 或 teach 生成的统一录制 JSON")
+    build.add_argument("source", help="teach 生成的示教录制 JSON")
     build.add_argument("--start", type=float, help="源记录中的开始秒数")
     build.add_argument("--end", type=float, help="源记录中的结束秒数")
     build.add_argument("--code", default="recorded.action", help="语义动作代码")
@@ -67,10 +62,7 @@ def main(argv=None):
 
     args = parser.parse_args(argv)
     try:
-        if args.command == "record":
-            from .record import record
-            summary = record(args.interface, args.seconds, args.output)
-        elif args.command == "teach":
+        if args.command == "teach":
             from .teach import teach
             summary = teach(args.interface, args.side, args.seconds,
                             args.output, args.profile, args.execute, args.stage)

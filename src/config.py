@@ -30,7 +30,7 @@ def _require_positive(data, keys, message):
 
 
 def validate_teach_profile(data, target_stage="record"):
-    required = ("hold_kp", "hold_kd")
+    required = ("hold_kp", "hold_kd", "hand_hold_kp", "hand_hold_kd")
     if target_stage != "hold":
         required += ("teach_kp", "teach_kd")
     if data.get("schema") != PROFILE_SCHEMA or data.get("target_profile") != PROFILE:
@@ -44,9 +44,18 @@ def validate_teach_profile(data, target_stage="record"):
         raise ValueError("保持增益超过候选程序上限")
     if target_stage != "hold" and (data["teach_kp"] > 20 or data["teach_kd"] > 2):
         raise ValueError("示教增益超过候选程序上限")
+    if target_stage != "hold":
+        value = data.get("hand_teach_kp")
+        if type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value < data["hand_hold_kp"]:
+            raise ValueError("手指示教刚度须为非负数且小于手指保持刚度")
+        _require_positive(data, ("hand_teach_kd",), "示教参数 {} 必须是正的有限数")
+        if data["hand_teach_kd"] > data["hand_hold_kd"]:
+            raise ValueError("手指示教阻尼不得大于保持阻尼")
+        required += ("hand_teach_kp", "hand_teach_kd")
     result = {key: float(data[key]) for key in required}
     if target_stage == "hold":
         result.update(teach_kp=result["hold_kp"], teach_kd=result["hold_kd"])
+        result.update(hand_teach_kp=result["hand_hold_kp"], hand_teach_kd=result["hand_hold_kd"])
     return result
 
 
@@ -55,7 +64,7 @@ def load_teach_profile(path, target_stage="record"):
 
 
 def validate_replay_profile(profile):
-    required = ("hold_kp", "hold_kd",
+    required = ("hold_kp", "hold_kd", "hand_hold_kp", "hand_hold_kd",
                 "max_tracking_error_rad", "initial_pose_tolerance_rad", "return_tolerance_rad", "return_speed_rad_s",
                 "state_timeout_s", "max_tick_gap_s", "settle_timeout_s", "recovery_release_s")
     if not isinstance(profile, dict):

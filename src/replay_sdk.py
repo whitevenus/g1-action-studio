@@ -1,9 +1,12 @@
 """依赖注入的 SDK 适配器；调用方必须显式提供 SDK，不导入真机库。"""
 
-from threading import Lock
+import math
+from threading import Event, Lock
 
-from .constants import ARM_COMMAND_TOPIC, ARM_SLOTS, DT, LOWSTATE_TOPIC, WEIGHT_SLOT
+from .constants import (ARM_COMMAND_TOPIC, ARM_SLOTS, DT, LOWSTATE_TOPIC, WEIGHT_SLOT,
+                        HAND_MOTOR_IDS, HAND_STATE_TOPICS, HAND_COMMAND_TOPICS)
 from .unitree_binding import arm_snapshot, close_channels
+from .trajectory import finite_vector
 
 
 class ReplaySdkPort:
@@ -13,11 +16,23 @@ class ReplaySdkPort:
         self.lock = Lock()
         self.latest = None
         self.commands = 0
+        self.ready = Event()
+        self.hand_states: dict[str, dict | None] = {side: None for side in HAND_MOTOR_IDS}
+        self.hand_resources = []
+        self.hand_publishers = {}
+        self.hand_profile: dict | None = None
         try:
             self.subscriber = sdk.ChannelSubscriber(LOWSTATE_TOPIC, getattr(sdk, "LowStateType", sdk.LowState))
             self.subscriber.Init(self._on_state, 10)
             self.arm_subscriber = sdk.ChannelSubscriber(ARM_COMMAND_TOPIC, getattr(sdk, "LowCmdType", sdk.LowCmd))
             self.arm_subscriber.Init(self._on_command, 10)
+            for side in HAND_MOTOR_IDS:
+                subscriber = sdk.ChannelSubscriber(HAND_STATE_TOPICS[side], sdk.HandStateType)
+                self.hand_resources.append(subscriber)
+                subscriber.Init(lambda message, side=side: self._on_hand(side, message), 10)
+                observer = sdk.ChannelSubscriber(HAND_COMMAND_TOPICS[side], sdk.HandCmdType)
+                self.hand_resources.append(observer)
+                observer.Init(self._on_command, 10)
         except BaseException as error:
             try:
                 self.close()
@@ -33,6 +48,24 @@ class ReplaySdkPort:
             state = None
         with self.lock:
             self.latest = state
+        if self.snapshot() is not None:
+            self.ready.set()
+
+    def _on_hand(self, side, message):
+        try:
+            if len(message.motor_state) != 7:
+                raise ValueError("Dex3-1 状态必须有7个电机")
+            motors = [message.motor_state[i] for i in HAND_MOTOR_IDS[side]]
+            q, dq = tuple(float(m.q) for m in motors), tuple(float(m.dq) for m in motors)
+            if not all(math.isfinite(v) for v in q + dq):
+                raise ValueError("手指反馈包含非有限数")
+            state = {"at": self.clock.monotonic(), "q": q, "dq": dq}
+        except (AttributeError, TypeError, ValueError, IndexError):
+            state = None
+        with self.lock:
+            self.hand_states[side] = state
+        if self.snapshot() is not None:
+            self.ready.set()
 
     def _on_command(self, _message):
         with self.lock:
@@ -40,7 +73,13 @@ class ReplaySdkPort:
 
     def snapshot(self):
         with self.lock:
-            return self.latest
+            left, right = self.hand_states["left"], self.hand_states["right"]
+            if self.latest is None or left is None or right is None:
+                return None
+            # 使用最旧的接收时间，手部断流不能被新鲜的手臂反馈掩盖。
+            return {**self.latest, "at": min(self.latest["at"], left["at"], right["at"]),
+                    "q": self.latest["q"] + left["q"] + right["q"],
+                    "dq": self.latest["dq"] + left["dq"] + right["dq"]}
 
     def observed_commands(self):
         with self.lock:
@@ -62,11 +101,23 @@ class ReplaySdkPort:
             raise RuntimeError("运控或手臂服务不符合候选条件")
 
     def start_publisher(self):
+        if self.hand_profile is None:
+            raise RuntimeError("缺少手部增益参数")
         self.publisher = self.sdk.ChannelPublisher(ARM_COMMAND_TOPIC, getattr(self.sdk, "LowCmdType", self.sdk.LowCmd))
         self.publisher.Init()
+        for side in HAND_MOTOR_IDS:
+            publisher = self.sdk.ChannelPublisher(HAND_COMMAND_TOPICS[side], self.sdk.HandCmdType)
+            self.hand_resources.append(publisher)
+            publisher.Init()
+            self.hand_publishers[side] = publisher
 
-    def write(self, positions, kp, kd, weight):
+    def write(self, positions, kp, kd, weight, *, side=None, selected_kp=None,
+              selected_kd=None, hand_kp=None, hand_kd=None):
+        positions = finite_vector(list(positions))  # 在任何通道发送前核对完整28关节目标。
         state = self.snapshot()
+        publisher, profile = self.publisher, self.hand_profile
+        if state is None or publisher is None or profile is None or len(self.hand_publishers) != 2:
+            raise RuntimeError("手臂/手指反馈或发布器尚未就绪")
         command = self.sdk.LowCmd()
         command.mode_pr = 0
         command.mode_machine = state["mode_machine"]
@@ -74,10 +125,27 @@ class ReplaySdkPort:
             motor = command.motor_cmd[slot]
             motor.mode = 1
             motor.q, motor.dq, motor.tau = float(positions[offset]), 0.0, 0.0
-            motor.kp, motor.kd = float(kp), float(kd)
+            selected = side == ("left" if offset < 7 else "right")
+            motor.kp = float(selected_kp if selected else kp)
+            motor.kd = float(selected_kd if selected else kd)
         command.motor_cmd[WEIGHT_SLOT].q = float(weight)
         command.crc = self.sdk.CRC().Crc(command)
-        return self.publisher.Write(command)
+        if publisher.Write(command) is not True:
+            return False
+        for hand_side, ids in HAND_MOTOR_IDS.items():
+            command = self.sdk.HandCmd()
+            offset = 14 if hand_side == "left" else 21
+            selected = hand_side == side and hand_kp is not None
+            for index, motor_id in enumerate(ids):
+                motor = command.motor_cmd[motor_id]
+                # 官方Dex3-1模式编码：低4位电机ID，bit4..6为status=1。
+                motor.mode = motor_id | (1 << 4)
+                motor.q, motor.dq, motor.tau = float(positions[offset+index]), 0.0, 0.0
+                motor.kp = float(hand_kp if selected else profile["hand_hold_kp"])
+                motor.kd = float(hand_kd if selected else profile["hand_hold_kd"])
+            if self.hand_publishers[hand_side].Write(command) is not True:
+                raise RuntimeError("Dex3-1 {} 命令发送失败；部分命令可能已送达".format(hand_side))
+        return True
 
     def close(self):
         errors = close_channels(self)

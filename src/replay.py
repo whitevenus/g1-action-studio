@@ -136,8 +136,8 @@ def screen_schedule(frames, limits, max_velocity, max_acceleration):
     for value in (max_velocity, max_acceleration):
         if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
             raise ValueError("离线速度和加速度阈值必须是正的有限数")
-    if len(limits) != len(ARM_SLOTS):
-        raise ValueError("必须提供全部 14 个关节范围")
+    if len(limits) != len(JOINT_NAMES):
+        raise ValueError("必须提供双臂和双手全部 28 个关节范围")
     motion = joint_motion(frames)
     computed = metrics(frames, motion)
     violations = []
@@ -145,7 +145,7 @@ def screen_schedule(frames, limits, max_velocity, max_acceleration):
     for offset, (low, high) in enumerate(limits):
         values = [frame["q"][offset] for frame in frames]
         _, velocities, accelerations = motion[offset]
-        per_joint.append({"slot": ARM_SLOTS[offset], "name": JOINT_NAMES[offset],
+        per_joint.append({"joint_index": offset, "name": JOINT_NAMES[offset],
                           "range_rad": [low, high], "min_rad": min(values), "max_rad": max(values),
                           "max_abs_velocity_rad_s": max(map(abs, velocities)),
                           "max_abs_acceleration_rad_s2": max(map(abs, accelerations))})
@@ -157,7 +157,7 @@ def screen_schedule(frames, limits, max_velocity, max_acceleration):
             for index, value in enumerate(series):
                 if rejected(value):
                     frame = frames[index + shift]
-                    violations.append({"slot": ARM_SLOTS[offset], "kind": kind,
+                    violations.append({"joint_index": offset, "kind": kind,
                                        "t": frame["t"], "phase": frame["phase"], "value": value})
                     break
     return {"metrics": computed, "per_joint": per_joint, "violations": violations}
@@ -209,7 +209,7 @@ def create_plan(data, baseline, model_path, max_velocity, max_acceleration,
     return {"schema": PLAN_SCHEMA,
             "qualification": "offline_only_not_executable", "hardware_enabled": False,
             "status": "offline_numerical_rejected" if screening["violations"] else "offline_numerical_pass",
-            "target_profile": PROFILE, "arm_slots": list(ARM_SLOTS),
+            "target_profile": PROFILE, "arm_slots": list(ARM_SLOTS), "joint_names": list(JOINT_NAMES),
             "action_code": actions[0]["action_code"], "action_version": actions[0]["action_version"],
             "source_trajectory_sha256": actions[0]["trajectory_sha256"],
             "actions": [{"code": action["action_code"], "trajectory_sha256": action["trajectory_sha256"]}

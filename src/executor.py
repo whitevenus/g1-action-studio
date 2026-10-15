@@ -3,7 +3,7 @@
 import math
 
 from .constants import (
-    ARM_JOINT_COUNT, ARM_SLOTS, DT, EXPECTED_MODE, EXPECTED_MOTOR_MODES, PLAN_SCHEMA, PROFILE,
+    JOINT_COUNT, JOINT_NAMES, ARM_SLOTS, DT, EXPECTED_MODE, EXPECTED_MOTOR_MODES, PLAN_SCHEMA, PROFILE,
 )
 from .config import validate_replay_profile
 from .trajectory import frame_digest
@@ -17,6 +17,7 @@ class Cancelled(RuntimeError):
 def validate_plan(plan):
     if (not isinstance(plan, dict) or plan.get("schema") != PLAN_SCHEMA
             or plan.get("target_profile") != PROFILE or plan.get("arm_slots") != list(ARM_SLOTS)
+            or plan.get("joint_names") != list(JOINT_NAMES)
             or plan.get("hardware_enabled") is not False
             or plan.get("qualification") != "offline_only_not_executable"
             or plan.get("status") != "offline_numerical_pass"):
@@ -25,7 +26,7 @@ def validate_plan(plan):
     if len(frames) > 30001 or plan["schedule_sha256"] != frame_digest(frames):
         raise ValueError("回放序列长度或摘要无效")
     limits = plan["model"]["limits_rad"]
-    if (len(limits) != ARM_JOINT_COUNT or any(len(pair) != 2 or
+    if (len(limits) != JOINT_COUNT or any(len(pair) != 2 or
             any(type(x) not in (int, float) or not math.isfinite(x) for x in pair)
             or pair[0] >= pair[1] for pair in limits)):
         raise ValueError("回放计划关节范围无效")
@@ -95,7 +96,7 @@ def execute_replay(plan, profile, port_factory, clock, stop):
             raise RuntimeError("手臂电机模式不符合条件")
         for key in ("q", "dq"):
             values = state.get(key)
-            if (not isinstance(values, (tuple, list)) or len(values) != ARM_JOINT_COUNT
+            if (not isinstance(values, (tuple, list)) or len(values) != JOINT_COUNT
                     or any(type(x) not in (int, float) or not math.isfinite(x) for x in values)):
                 raise RuntimeError("关节状态无效")
         if any(q < low or q > high for q, (low, high) in zip(state["q"], limits)):
@@ -135,7 +136,7 @@ def execute_replay(plan, profile, port_factory, clock, stop):
         logs.append(entry)
         # 发送失败也可能已送达，因此先记录尝试权重。
         attempted_weight = weight
-        control_attempted = control_attempted or weight > 0
+        control_attempted = True  # 手部没有权重，首个零手臂权重周期也可能已控制手指。
         result = port.write(q, profile["hold_kp"], profile["hold_kd"], weight)
         if result is not True:
             raise RuntimeError("SDK Write 未确认成功")
@@ -184,6 +185,7 @@ def execute_replay(plan, profile, port_factory, clock, stop):
             raise RuntimeError("接管前姿态已偏离基线")
         if max(map(abs, state["dq"])) > profile["return_speed_rad_s"]:
             raise RuntimeError("接管前手臂尚未静止")
+        port.hand_profile = profile
         port.start_publisher()
         stage = "playback"
         run_segment(0, return_end)
@@ -244,6 +246,8 @@ def execute_replay(plan, profile, port_factory, clock, stop):
             "qualification": "unqualified_executor_trial", "control_owner": "unknown",
             "schedule_sha256": plan["schedule_sha256"], "profile": profile,
             "release_sent": release_sent, "recovery_release_sent": recovery_release_sent,
+            "hand_release_sent": False,
+            "hand_finish": "手部无权重释放接口；关闭发布器不证明手指已卸力或保持",
             "handover_confirmed": False, "requires_operator": bool(cleanup_errors) or
             (bool(errors) and control_attempted),
             "errors": errors, "cleanup_errors": cleanup_errors, "samples": logs,
