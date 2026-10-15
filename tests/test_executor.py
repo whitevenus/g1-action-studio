@@ -1,4 +1,3 @@
-from g1_action_studio.constants import JOINT_NAMES
 import copy
 import math
 import sys
@@ -6,10 +5,9 @@ import unittest
 from threading import Event
 from unittest.mock import Mock, patch
 
-from g1_action_studio import ARM_SLOTS, PROFILE
+from g1_action_studio.constants import ARM_SLOTS, COLLISION_MODEL, JOINT_NAMES, PROFILE
 from g1_action_studio.trajectory import frame_digest
 from g1_action_studio.executor import execute_replay
-from g1_action_studio.constants import DEFAULT_MODEL
 from g1_action_studio.replay import build_schedule, load_limits
 from g1_action_studio.replay_sdk import ReplaySdkPort
 from fake_sdk import SIMULATION_PROFILE, SimulatedSDK, VirtualClock, simulate_replay
@@ -23,7 +21,7 @@ def make_plan():
     return {"schema": "g1-arm7-dex3-offline-replay-plan-v1", "target_profile": PROFILE,
             "arm_slots": list(ARM_SLOTS), "joint_names": list(JOINT_NAMES), "hardware_enabled": False,
             "qualification": "offline_only_not_executable", "status": "offline_numerical_pass",
-            "baseline": {"q": [0.0] * 28}, "model": {"limits_rad": load_limits(DEFAULT_MODEL)},
+            "baseline": {"q": [0.0] * 28}, "model": {"limits_rad": load_limits(COLLISION_MODEL)},
             "thresholds": {"max_velocity_rad_s": 1, "max_acceleration_rad_s2": 20},
             "frames": frames, "phases": phases, "schedule_sha256": frame_digest(frames)}
 

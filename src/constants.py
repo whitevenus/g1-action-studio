@@ -5,8 +5,6 @@ from pathlib import Path
 PROFILE = "unitree-g1-arm7-dex3-1"
 ARM_SLOTS = tuple(range(15, 29))
 ARM_JOINT_COUNT = len(ARM_SLOTS)
-LEFT = ARM_SLOTS[:ARM_JOINT_COUNT // 2]
-RIGHT = ARM_SLOTS[ARM_JOINT_COUNT // 2:]
 WEIGHT_SLOT = 29  # SDK 控制权重，不是物理关节。
 ARM_JOINT_NAMES = (
     "left_shoulder_pitch", "left_shoulder_roll", "left_shoulder_yaw",
@@ -41,6 +39,4 @@ RECORDING_SCHEMA = "g1-arm7-dex3-state-recording-v1"
 ACTION_SCHEMA = "g1-arm7-dex3-action-v1"
 PLAN_SCHEMA = "g1-arm7-dex3-offline-replay-plan-v1"
 PROFILE_SCHEMA = "g1-arm7-dex3-teach-profile-v1"
-RESOURCES = Path(__file__).resolve().parent / "resources"
-COLLISION_MODEL = RESOURCES / "collision/g1_arm7_dex3.xml"
-DEFAULT_MODEL = COLLISION_MODEL
+COLLISION_MODEL = Path(__file__).resolve().parent / "resources/collision/g1_arm7_dex3.xml"

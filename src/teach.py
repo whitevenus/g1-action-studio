@@ -10,10 +10,10 @@ from queue import Queue, Empty
 from concurrent.futures import ThreadPoolExecutor
 
 from .constants import (
-    ARM_SLOTS, DT, JOINT_NAMES, PROFILE,
+    ARM_SLOTS, COLLISION_MODEL, DT, JOINT_NAMES, PROFILE,
     RECORDING_SCHEMA, SIDE_OFFSETS, TEACH_TAKEOVER_SECONDS, TEACH_SOFTEN_SECONDS,
 )
-from .config import load_teach_profile as load_profile, write_json
+from .config import load_teach_profile, write_json
 from .unitree_binding import create_sdk
 from .replay_sdk import ReplaySdkPort, validate_snapshot
 
@@ -25,7 +25,7 @@ def teach(interface, side, output, profile_path, execute=False):
     output = Path(output)
     if output.exists():
         raise FileExistsError("输出文件已存在，请换新文件名")
-    profile = load_profile(profile_path)
+    profile = load_teach_profile(profile_path)
     if not execute:
         return {"execute": False, "side": side, "profile": profile, "output": str(output),
                 "message": "只核对参数；没有连接机器人或发送命令"}
@@ -54,10 +54,9 @@ def plan_return(start, end, side, body_q):
 def run_session(interface, side, output, profile):
     """接管、降低刚度、回车录制、恢复刚度、避碰回位后释放。"""
     from .trajectory import interpolate_positions, smoothstep
-    from .constants import DEFAULT_MODEL
     from .replay import load_limits
     from .collision import CollisionModel
-    limits = load_limits(DEFAULT_MODEL)
+    limits = load_limits(COLLISION_MODEL)
     stop, events = Event(), Queue()
     previous = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
     port = None

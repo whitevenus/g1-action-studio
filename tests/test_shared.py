@@ -1,5 +1,4 @@
 """公共实现的行为回归：数值、参数快照与输出不覆盖。"""
-from g1_action_studio.constants import JOINT_NAMES
 import io
 import json
 import unittest

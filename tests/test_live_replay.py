@@ -1,4 +1,3 @@
-from g1_action_studio.constants import JOINT_NAMES
 import contextlib
 import io
 import hashlib
@@ -10,8 +9,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from g1_action_studio import ARM_SLOTS, PROFILE
-from g1_action_studio.__main__ import main
+from g1_action_studio.constants import ARM_SLOTS, COLLISION_MODEL, JOINT_NAMES, PROFILE
+from g1_action_studio.cli import main
 from g1_action_studio.live_replay import replay
 from g1_action_studio.replay import build_schedule, retime_frames, screen_schedule
 from fake_sdk import SimulatedSDK, VirtualClock
@@ -44,8 +43,7 @@ class LiveReplayTests(unittest.TestCase):
             "target_profile": PROFILE, "arm_slots": list(ARM_SLOTS), "joint_names": list(JOINT_NAMES), "samples": samples}), encoding="utf-8")
         candidate = Path(__file__).parents[1] / "examples/profiles/replay.json"
         self.profile_path.write_text(candidate.read_text(encoding="utf-8"), encoding="utf-8")
-        from g1_action_studio.constants import DEFAULT_MODEL
-        self.model = DEFAULT_MODEL
+        self.model = COLLISION_MODEL
 
     def run_replay(self, execute=False):
         return replay("unused", self.source, self.profile_path, self.model,

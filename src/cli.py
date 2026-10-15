@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 
-from .constants import DEFAULT_MODEL
+from .constants import COLLISION_MODEL
 from .author import load_action
 from .config import read_json, write_json
 from . import __version__
@@ -41,7 +41,7 @@ def main(argv=None):
     playback.add_argument("source", nargs="+", help="按播放顺序填写一个或多个录制/动作 JSON")
     playback.add_argument("--side", choices=("left", "right"), help="默认使用组合动作的回放侧；其他输入默认 left")
     playback.add_argument("--profile", required=True, help="回放候选参数 JSON")
-    playback.add_argument("--model", default=str(DEFAULT_MODEL), help="本机配置对应的关节范围 XML")
+    playback.add_argument("--model", default=str(COLLISION_MODEL), help="本机配置对应的关节范围 XML")
     playback.add_argument("--speed-scale", type=float, default=0.5, help="平均播放速度比例，默认 0.5：约两倍时长；单个动作平滑两端")
     playback.add_argument("--output", required=True, help="新报告文件；包含本次规划和执行反馈")
     playback.add_argument("--execute", action="store_true", help="显式启用单次真机回放")

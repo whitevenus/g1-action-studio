@@ -1,5 +1,4 @@
 """实际使用流程：录制直接回放、制作后回放、衔接后回放。"""
-from g1_action_studio.constants import JOINT_NAMES
 import contextlib
 import io
 import json
@@ -8,10 +7,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from g1_action_studio.constants import ACTION_SCHEMA, ARM_SLOTS, COLLISION_MODEL, JOINT_NAMES, PROFILE
 from g1_action_studio.author import load_action
 from g1_action_studio.cli import main
 from g1_action_studio.config import write_json
-from g1_action_studio.constants import ACTION_SCHEMA, ARM_SLOTS, DEFAULT_MODEL, PROFILE
 from g1_action_studio.live_replay import replay
 from g1_action_studio.transition import plan_transition
 from fake_sdk import SimulatedSDK, VirtualClock
@@ -52,7 +51,7 @@ class ActionFixtures:
         with patch("g1_action_studio.live_replay.create_sdk", return_value=sdk), \
                 patch("g1_action_studio.live_replay.time", clock), \
                 contextlib.redirect_stdout(io.StringIO()):
-            result = replay("unused", source, self.profile, DEFAULT_MODEL, self.output,
+            result = replay("unused", source, self.profile, COLLISION_MODEL, self.output,
                             speed_scale=1.0, execute=True, **kwargs)
         return result, sdk, json.loads(self.output.read_text(encoding="utf-8"))
 
@@ -93,7 +92,7 @@ class ActionFlowTests(ActionFixtures, unittest.TestCase):
         write_json(load_action(source), action)
         with patch("g1_action_studio.live_replay.create_sdk") as factory:
             with self.assertRaisesRegex(ValueError, "合成示例"):
-                replay("unused", action, self.profile, DEFAULT_MODEL, self.output, execute=True)
+                replay("unused", action, self.profile, COLLISION_MODEL, self.output, execute=True)
             factory.assert_not_called()
 
 
@@ -143,7 +142,7 @@ class CombinedFlowTests(ActionFixtures, unittest.TestCase):
         action = self.combined()
         with patch("g1_action_studio.live_replay.create_sdk") as factory:
             with self.assertRaisesRegex(ValueError, "回放侧"):
-                replay("unused", action, self.profile, DEFAULT_MODEL, self.output, side="right", execute=True)
+                replay("unused", action, self.profile, COLLISION_MODEL, self.output, side="right", execute=True)
             factory.assert_not_called()
 
     def test_nonzero_bridge_and_return_route_execute_as_one_action(self):
@@ -188,7 +187,7 @@ class CombinedFlowTests(ActionFixtures, unittest.TestCase):
         with patch("g1_action_studio.live_replay.create_sdk", return_value=sdk), \
                 patch("g1_action_studio.live_replay.time", clock), \
                 contextlib.redirect_stdout(io.StringIO()):
-            result = replay("unused", action, self.profile, DEFAULT_MODEL, self.output, execute=True)
+            result = replay("unused", action, self.profile, COLLISION_MODEL, self.output, execute=True)
         report = json.loads(self.output.read_text(encoding="utf-8"))
         self.assertEqual(result["status"], "failed")
         self.assertIn("腿/腰姿态", report["errors"][0]["message"])

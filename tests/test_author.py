@@ -1,10 +1,9 @@
-from g1_action_studio.constants import JOINT_NAMES
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from g1_action_studio import ARM_SLOTS, PROFILE
+from g1_action_studio.constants import ARM_SLOTS, JOINT_NAMES, PROFILE
 from g1_action_studio.author import load_action
 from g1_action_studio.config import write_json
 

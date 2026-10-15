@@ -1,5 +1,4 @@
 """回车边界、终点保持、回位后释放；只用内存端口。"""
-from g1_action_studio.constants import DT, TEACH_TAKEOVER_SECONDS, TEACH_SOFTEN_SECONDS
 import io
 import json
 import tempfile
@@ -8,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from g1_action_studio.constants import DT, TEACH_SOFTEN_SECONDS, TEACH_TAKEOVER_SECONDS
 from g1_action_studio.teach import teach
 from fake_sdk import VirtualClock
 
