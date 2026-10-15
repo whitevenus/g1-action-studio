@@ -11,7 +11,7 @@ python -m build
 
 项目说明、注释和用户提示使用中文；Python 标识符、命令参数、协议字段和第三方许可保留原名。
 
-基础功能支持 Python 3.8+。避碰测试需要 Linux Python 3.10+ 和 `python -m pip install -e '.[planning]'`。
+统一使用 Python 3.11 开发和验证。避碰测试需要 Linux 环境和 `python -m pip install -e '.[planning]'`。
 缺少 OMPL 或 MuJoCo 时会跳过避碰测试；跳过不算该功能验证通过。
 CI 会单独安装 OMPL 与 MuJoCo 运行避碰测试。
 

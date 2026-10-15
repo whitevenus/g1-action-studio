@@ -16,7 +16,7 @@ docs/       代码导航与避碰说明
 data/       个人录制和验证输出
 ```
 
-Python 3.8 及以上。文件整理只用标准库；示教录制与回放的避碰规划需要 Python 3.10+ 、Linux 环境及 OMPL + MuJoCo（`planning` 依赖）。真机功能需要另外安装官方 `unitree_sdk2py` 和兼容的 CycloneDDS。不要把 Python 包版本兼容等同于机器人固件兼容。
+项目统一使用 Python 3.11 开发和验证，最低要求为 Python 3.11。文件整理只用标准库；示教录制与回放的避碰规划需要 Linux 环境及 OMPL + MuJoCo（`planning` 依赖）。真机功能需要另外安装官方 `unitree_sdk2py` 和兼容的 CycloneDDS。不要把 Python 包版本兼容等同于机器人固件兼容。
 
 ## 安装与运行
 

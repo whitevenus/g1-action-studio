@@ -142,7 +142,7 @@ def find_path(model, start, end, side, margin=0.02, timeout=5.0):
     try:
         from ompl import base as ob, geometric as og
     except ImportError as error:
-        raise ImportError('避碰规划需要 OMPL 2.0.1；请在 Linux Python 3.10+ 安装 .[planning]') from error
+        raise ImportError('避碰规划需要 OMPL 2.0.1；请在 Linux Python 3.11 环境安装 .[planning]') from error
     start, end = model.validate(start), model.validate(end)
     if side not in ARM_OFFSETS or not 0.001 <= margin <= 0.10:
         raise ValueError('side 须为 left/right；避碰余量须为 0.001–0.10 米')

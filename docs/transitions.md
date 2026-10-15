@@ -4,7 +4,7 @@
 
 ## 使用
 
-Linux Python 3.10+，使用 OMPL 2.0.1 和 MuJoCo 3.15+，在项目根目录运行：
+Linux Python 3.11，使用 OMPL 2.0.1 和 MuJoCo 3.15+，在项目根目录运行：
 
 ```bash
 python -m pip install -e '.[planning]'
