@@ -8,13 +8,23 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m pip install . ruff==0.16.8 build
+      - run: python -m pip install uv==0.13.1 ruff==0.16.8
+      - run: uv sync --locked --extra dev
       - run: ruff check src tests
       - run: ruff format --check src tests
-      - run: python -m unittest discover -s tests -p 'test_motion.py' -v
-      - run: python -m unittest discover -s tests -p 'test_cli.py' -v
-      - run: g1-action-studio --help
-      - run: python -m build --wheel
+      - run: uv run --no-sync python tests/run_tests.py numerical
+      - run: uv run --no-sync g1-action-studio --help
+      - run: uv build --wheel
+      - run: python tests/verify_wheel.py dist/*.whl
+      - name: 项目目录外安装与文件数值验证
+        run: |
+          uv export --locked --no-emit-project --no-hashes > "$RUNNER_TEMP/numerical.txt"
+          uv venv /tmp/g1-numerical-install
+          uv pip install --python /tmp/g1-numerical-install/bin/python dist/*.whl -r "$RUNNER_TEMP/numerical.txt"
+          cd /tmp
+          /tmp/g1-numerical-install/bin/g1-action-studio --help
+          /tmp/g1-numerical-install/bin/python "$GITHUB_WORKSPACE/tests/verify_wheel.py" "$GITHUB_WORKSPACE"/dist/*.whl --installed
+          /tmp/g1-numerical-install/bin/python "$GITHUB_WORKSPACE/tests/run_tests.py" numerical
   preview:
     runs-on: ubuntu-latest
     steps:
@@ -22,26 +32,31 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m pip install '.[planning,dev]'
+      - run: python -m pip install uv==0.13.1
+      - run: uv sync --locked --extra dev --extra planning
       - name: 固定官方 SDK 与 CycloneDDS 离线验证依赖
         run: |
           git clone --depth 1 --branch 0.10.2 https://github.com/eclipse-cyclonedds/cyclonedds.git "$RUNNER_TEMP/cyclone-src"
           cmake -S "$RUNNER_TEMP/cyclone-src" -B "$RUNNER_TEMP/cyclone-build" -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/cyclone" -DCMAKE_INSTALL_LIBDIR=lib -DBUILD_DDSPERF=OFF -DBUILD_TESTING=OFF -DBUILD_EXAMPLES=OFF
           cmake --build "$RUNNER_TEMP/cyclone-build" --parallel 4
           cmake --install "$RUNNER_TEMP/cyclone-build"
-          CYCLONEDDS_HOME="$RUNNER_TEMP/cyclone" python -m pip install 'cyclonedds==0.10.2'
+          CYCLONEDDS_HOME="$RUNNER_TEMP/cyclone" uv pip install --python .venv/bin/python 'cyclonedds==0.10.2'
           git clone https://github.com/unitreerobotics/unitree_sdk2_python.git "$RUNNER_TEMP/unitree-sdk"
           git -C "$RUNNER_TEMP/unitree-sdk" checkout 814556d15970dd2ecf1c9984e845ca02ab07e206
-          python -m pip install --no-deps -e "$RUNNER_TEMP/unitree-sdk"
-      - run: python -m unittest discover -s tests -v
-      - run: python -m build --wheel
+          uv pip install --python .venv/bin/python --no-deps -e "$RUNNER_TEMP/unitree-sdk"
+      - run: uv run --no-sync python tests/run_tests.py full
+      - run: uv build --wheel
+      - run: python tests/verify_wheel.py dist/*.whl
       - name: 项目目录外安装与真实资源验证
         run: |
-          python -m venv /tmp/g1-preview-install
-          /tmp/g1-preview-install/bin/pip install dist/*.whl 'mujoco>=3.15,<4' 'ompl==2.0.1'
-          CYCLONEDDS_HOME="$RUNNER_TEMP/cyclone" /tmp/g1-preview-install/bin/pip install 'cyclonedds==0.10.2'
-          /tmp/g1-preview-install/bin/pip install --no-deps -e "$RUNNER_TEMP/unitree-sdk"
+          uv export --locked --extra planning --no-emit-project --no-hashes > "$RUNNER_TEMP/planning.txt"
+          uv venv /tmp/g1-preview-install
+          uv pip install --python /tmp/g1-preview-install/bin/python dist/*.whl -r "$RUNNER_TEMP/planning.txt"
+          CYCLONEDDS_HOME="$RUNNER_TEMP/cyclone" uv pip install --python /tmp/g1-preview-install/bin/python 'cyclonedds==0.10.2'
+          uv pip install --python /tmp/g1-preview-install/bin/python --no-deps -e "$RUNNER_TEMP/unitree-sdk"
           cd /tmp
           /tmp/g1-preview-install/bin/g1-action-studio --help
+          /tmp/g1-preview-install/bin/python -m g1_action_studio --help
+          /tmp/g1-preview-install/bin/python "$GITHUB_WORKSPACE/tests/verify_wheel.py" "$GITHUB_WORKSPACE"/dist/*.whl --installed
           /tmp/g1-preview-install/bin/python "$GITHUB_WORKSPACE/tests/verify_install.py" "$GITHUB_WORKSPACE/examples"
-          /tmp/g1-preview-install/bin/python "$GITHUB_WORKSPACE/tests/test_replay.py"
+          /tmp/g1-preview-install/bin/python "$GITHUB_WORKSPACE/tests/run_tests.py" workflow
