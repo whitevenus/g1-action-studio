@@ -1,7 +1,7 @@
 # G1 Action Studio
 
 G1 Arm7 上肢动作工具，支持左臂、右臂、双臂、双臂加腰四种范围。
-当前版本实现四组动作的规划、离线预览及连续回放（#9–#11）；示教在 #12 实现。
+支持四组动作的同步示教、避碰衔接、离线预览和连续回放。
 
 ```sh
 uv sync --extra planning
@@ -34,6 +34,18 @@ uv run --extra planning g1-action-studio replay examples/arms_waist.json example
 
 `--execute` 是实际发送入口，缺少时返回用法错误。Ctrl+C 或终端 EOF 取消：固定最后成功发送的目标、目标速度归零并降权重，不另做回家运动；一次 Write 失败即停止后续发送。
 配置只保留 `arms`、`waist` 各自的 `hold_kp/hold_kd/teach_kp/teach_kd`，格式见 [增益示例](examples/gains.json)。SDK 安装与离线验证见 [开发说明](CONTRIBUTING.md)。
+
+示教使用同一 SDK 环境和增益配置，选择 `left_arm`、`right_arm`、`arms` 或 `arms_waist`：
+
+```sh
+uv run --extra planning g1-action-studio teach --interface eth0 --group arms_waist --config gains.json --output my_action.json --execute
+```
+
+程序取得启动姿态并接管，所选关节跟随反馈，渐变到 teach 增益，其余关节保持启动位置与 hold 增益。
+看到提示后第一次回车开始录制，第二次回车结束。每条真实反馈记录一次所选关节的同步位置，时间从首条记录归零；至少需要两条反馈。
+结束时立即冻结记录末帧，保存期间保持 teach 增益。文件保存成功后才恢复 hold 增益、规划避碰返回启动姿态，最后降权重交回。
+`--output` 必须是新文件；保存失败不会启动回位，回位失败则保留已保存的动作。`--transition-seconds` 控制返回连接时长，默认2秒。
+提示前的回车会丢弃；Ctrl+C 或 EOF 在任何阶段取消，通过同一发送循环固定最后成功发送的目标、恢复 hold 增益并降权重，不保存中途录制。
 
 动作只有 `group` 与 `frames`，每帧只有 `t`、`q`：
 

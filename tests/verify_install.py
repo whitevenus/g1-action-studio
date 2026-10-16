@@ -12,6 +12,10 @@ from g1_action_studio.planner import plan_sequence
 
 
 def main():
+    from ompl import util
+
+    # 安装回归固定随机输入；仍执行真实搜索及最终曲线碰撞检测。
+    util.RNG.setSeed(42)
     examples = Path(sys.argv[1]).resolve()
     start = load_start(examples / "start.json")
     model = ArmModel(start.leg_q)
