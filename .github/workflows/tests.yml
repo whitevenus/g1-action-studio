@@ -1,28 +1,33 @@
 name: 离线测试
 on: [push, pull_request]
 jobs:
-  test:
+  numerical:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m pip install . ruff==0.16.8
+      - run: python -m pip install . ruff==0.16.8 build
       - run: ruff check src tests
       - run: ruff format --check src tests
-      - run: python -m unittest discover -s tests -v
+      - run: python -m unittest discover -s tests -p 'test_motion.py' -v
       - run: g1-action-studio --help
-  collision:
+      - run: python -m build --wheel
+  preview:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m pip install '.[planning]'
-      - name: Arm7 complete offline user flow (no dependency skips)
-        env:
-          G1_REQUIRE_PLANNING: '1'
-        run: python -m unittest discover -s tests -p 'test_arm7_flow.py' -v
+      - run: python -m pip install '.[planning,dev]'
       - run: python -m unittest discover -s tests -v
+      - run: python -m build --wheel
+      - name: 项目目录外安装与真实资源验证
+        run: |
+          python -m venv /tmp/g1-preview-install
+          /tmp/g1-preview-install/bin/pip install dist/*.whl 'mujoco>=3.15,<4'
+          cd /tmp
+          /tmp/g1-preview-install/bin/g1-action-studio --help
+          /tmp/g1-preview-install/bin/python "$GITHUB_WORKSPACE/tests/verify_install.py" "$GITHUB_WORKSPACE/examples"

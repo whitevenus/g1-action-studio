@@ -1,44 +1,24 @@
 # 开发说明
 
-源码直接在 `src/` 中修改。先在项目根目录安装，再运行测试：
+Python 3.11，标准 src 包布局，unittest 与 Ruff。依赖继续用 uv 管理：
 
 ```sh
-python -m pip install -e '.[dev]'
-python -m unittest discover -s tests -v
-g1-action-studio --help
-python -m build
+uv sync --extra dev --extra planning
+uv run python -m unittest discover -s tests -v
+uv tool run ruff==0.16.8 check src tests
+uv tool run ruff==0.16.8 format --check src tests
+uv run python -m build
 ```
 
-项目说明、注释和用户提示使用中文；Python 标识符、命令参数、协议字段和第三方许可保留原名。
+普通文件/数值测试不需要 MuJoCo；模型、规划和预览测试需要 planning 依赖，缺失依赖应失败，不用 skip 代替验证。
+图形预览以 Linux 为交付平台，Windows 可执行数值、文件及无窗口模型测试。测试不连接机器人，headless 验证绘制数据而非窗口目视效果。
 
-统一使用 Python 3.11 开发和验证。避碰测试需要 Linux 环境和 `python -m pip install -e '.[planning]'`。
-缺少 OMPL 或 MuJoCo 时会跳过避碰测试；跳过不算该功能验证通过。
-CI 会单独安装 OMPL 与 MuJoCo 运行避碰测试。
+当前仅 preview 可用。新代码按 PRD/SPEC 从空包写，不恢复旧格式、旧入口、灵巧手或旧回放阈值。
+业务模块保持直接调用：motion 管文件与 PPoly，model 管唯一关节映射和 MuJoCo，planner 管完整曲线与连接，preview 显示同一曲线，cli 解析参数。
+不添加转发包装、同值别名、插件框架或临时模式。后续 robot/teach/replay 合入前不创建占位模块。
 
-默认测试不连接机器人。`tests/fake_sdk.py` 提供内存消息与虚拟时钟，只用于测试，不随项目安装。
-不要把真机动作加入默认测试。
-验证安装包时应从项目目录之外运行命令，确认资源随包安装。
+关节映射集中于 model。model 顶层不加载 MuJoCo；planner 不依赖设备；曲线碰撞检测只在规划阶段进行。
+模型与 viewer 各持自己的 MjData；viewer 使用 FK，不调用 mj_step 生成另一条运动。
 
-优先使用直接的函数和已有上下文，避免重复实现、只转发调用的包装层和暂时用不到的框架。
-关节范围与碰撞检查统一使用内置 G1 Arm7 + Dex3-1 模型，不添加独立范围文件入口。
-共享常量放在 `constants.py`，轨迹计算放在 `trajectory.py`，参数校验和 JSON 读写放在 `config.py`。
-业务模块直接调用这些函数，不跨模块引用带下划线的私有工具函数。
-同一含义只保留一个名称和定义；不要添加同值常量别名、无必要的改名导入或包级转导出。
-调用方直接从定义模块按原名导入；删除无调用的声明，同一模块的导入合并书写。
-Python 源码与测试共用 `pyproject.toml` 中的 Ruff 规则：双引号、四空格缩进、120 字符行宽和统一导入排序。
-可安装 `ruff==0.16.8`，修改后执行 `ruff check src tests` 和 `ruff format --check src tests`；
-需要整理时执行 `ruff check --select I --fix src tests` 和 `ruff format src tests`。
-示教与回放必须保留显式 `--execute`、反馈有效性检查、输出不覆盖和异常释放流程。
-
-示例参数和合成轨迹不能视为通用真机参数。记录验证结果时，区分离线检查、SDK 写入、实测反馈和现场动作/交接。
-不要提交凭据、私有设备地址、厂商 SDK 二进制或个人录制；回归测试使用合成样本。
-
-`build` 转换整段示教录制；动作边界由示教中的两次回车确定，不提供秒数裁剪参数。重采样必须保留首末实测姿态。
-
-文件入口接受统一 v2 录制或动作；旧 Dex3 v1 只在加载入口验证并归一化，业务流程不分别处理旧格式。单个与组合动作共用 `replay` 和执行器，必要检查在加载、规划、发送处自动执行，不增加独立审核命令。
-
-录制输入事件不操作 SDK。避碰路径搜索不得阻塞控制发送循环；示教回位规划在工作线程计算，等待期间持续保持终点。回放全部路径在接管前计算，通过后再执行。
-
-控制布局支持 Arm7 双臂14关节和 Arm7 + Dex3-1 共28关节；通过 profile 明确选择，不能自动降级。关节名称顺序与硬件电机槽位分开。仅手臂模式没有手部 DDS 通道，但实体手仍以完整活动区间参与避碰。手臂权重不作用于手指；增益独立配置。不得把手部缺帧补零、缓存过期反馈或将手部关闭通道报告成卸力成功。
-
-示教只维护完整流程：接管、降低刚度、两次回车录制、终点保持、恢复刚度、避碰回位、稳定后释放。不要恢复独立调试阶段、录制倒计时或无效计数字段。示教接管和降低刚度各2秒，在 `constants.py` 中定义；示教与回放共用 SDK 初始化和状态校验，保留各自的执行策略。
+项目提示与说明使用中文，标识符与第三方许可保持原文。Python 使用双引号、四空格、120字符行宽和 CRLF。
+验证 wheel 时必须从项目目录外加载包和模型资源，不能依赖源码工作目录。不要提交个人录制、凭据、重写备份或厂商SDK。
