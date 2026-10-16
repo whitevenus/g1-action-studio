@@ -80,6 +80,8 @@ main(['--help'])
         start = load_start(EXAMPLES / "start.json")
         sequences = [[group] for group in GROUPS]
         sequences += [["arms_waist", "left_arm"], ["left_arm", "right_arm"]]
+        if sys.platform == "linux":
+            sequences.append(["detour_left_arm"])
         for groups in sequences:
             with self.subTest(groups=groups):
                 actions = [load_action(EXAMPLES / f"{group}.json") for group in groups]

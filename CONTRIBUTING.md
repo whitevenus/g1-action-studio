@@ -17,6 +17,16 @@ uv run python -m build
 业务模块保持直接调用：motion 管文件与 PPoly，model 管唯一关节映射和 MuJoCo，planner 管完整曲线与连接，preview 显示同一曲线，cli 解析参数。
 不添加转发包装、同值别名、插件框架或临时模式。后续 robot/teach/replay 合入前不创建占位模块。
 
+Linux 绕行、无解和取消用例可单独运行：
+
+```sh
+uv run python -m unittest discover -s tests -p 'test_rrt.py' -v
+```
+
+成功用例使用真实模型和 RRTConnect，覆盖7/14/17维、最终曲线及固定的非活动关节。
+无解用例将左臂除肩 Yaw 外的搜索范围收窄到启动值附近，让真实模型的碰撞带隔开起终点；真实搜索得到的近似解必须拒绝。
+收窄范围仅用于构造确定无解的测试，生产搜索始终采用模型 XML 全部活动关节的原始范围。另验证搜索及快捷删点期间取消不会返回轨迹。
+
 关节映射集中于 model。model 顶层不加载 MuJoCo；planner 不依赖设备；曲线碰撞检测只在规划阶段进行。
 模型与 viewer 各持自己的 MjData；viewer 使用 FK，不调用 mj_step 生成另一条运动。
 

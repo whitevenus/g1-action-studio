@@ -134,8 +134,6 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(self.model.valid(HOME), self.model.last_error)
         self.assertTrue(self.model.valid(end), self.model.last_error)
         self.assertFalse(self.model.valid((HOME + end) / 2))
-        with self.assertRaisesRegex(PlanningError, "直连受阻.*碰撞"):
-            connect(self.model, HOME, end, {"left_arm"}, 2, Event())
         action = Action("left_arm", np.array([0.0, 1.0]), np.stack([HOME[:7], end[:7]]))
         trajectory = action_curve(action, HOME, 1)
         with self.assertRaisesRegex(PlanningError, "碰撞"):
