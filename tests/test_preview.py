@@ -77,6 +77,7 @@ main(['--help'])
         import mujoco
         import mujoco.viewer
 
+        device_modules = {name for name in sys.modules if name.startswith(("unitree", "cyclonedds"))}
         start = load_start(EXAMPLES / "start.json")
         sequences = [[group] for group in GROUPS]
         sequences += [["arms_waist", "left_arm"], ["left_arm", "right_arm"]]
@@ -130,7 +131,9 @@ main(['--help'])
                     np.testing.assert_allclose(qpos[reference_model.upper_qpos], target, atol=1e-13)
                     np.testing.assert_array_equal(qpos[reference_model.leg_qpos], start.leg_q)
                 self.assertIsNot(viewer_data[0][1], reference_model.data)
-                self.assertFalse(any(name.startswith(("unitree", "cyclonedds")) for name in sys.modules))
+                self.assertEqual(
+                    {name for name in sys.modules if name.startswith(("unitree", "cyclonedds"))}, device_modules
+                )
 
     def test_cancelled_preview_never_opens_viewer(self):
         start = load_start(EXAMPLES / "start.json")

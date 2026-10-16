@@ -1,7 +1,7 @@
 # G1 Action Studio
 
 G1 Arm7 上肢动作工具，支持左臂、右臂、双臂、双臂加腰四种范围。
-当前版本实现四组动作的离线预览及受阻绕行（#9–#10）；设备回放和示教在 #11–#12 实现。
+当前版本实现四组动作的规划、离线预览及连续回放（#9–#11）；示教在 #12 实现。
 
 ```sh
 uv sync --extra planning
@@ -24,6 +24,16 @@ uv run --extra planning g1-action-studio preview examples/detour_left_arm.json -
 进入与返回各4秒，总共12秒。绕行路径可能随搜索变化；折线拐点允许停顿。
 单臂只搜索7维，左右换组开放双臂14维，含腰换组开放17维；搜索最多5秒，随后最多1秒删点，连接总时长仍由 `--transition-seconds` 决定。
 仅连接段会绕行，不能通过重规划改写原动作。
+
+设备回放先从同一条反馈取得腿部与上肢启动姿态，完成全部规划后再接管；连续播放进入、动作、衔接和返回，最后降低权重交回。
+使用已安装固定版本官方 SDK 的 Linux 环境，提供设备增益配置后执行：
+
+```sh
+uv run --extra planning g1-action-studio replay examples/arms_waist.json examples/left_arm.json --interface eth0 --config gains.json --execute
+```
+
+`--execute` 是实际发送入口，缺少时返回用法错误。Ctrl+C 或终端 EOF 取消：固定最后成功发送的目标、目标速度归零并降权重，不另做回家运动；一次 Write 失败即停止后续发送。
+配置只保留 `arms`、`waist` 各自的 `hold_kp/hold_kd/teach_kp/teach_kd`，格式见 [增益示例](examples/gains.json)。SDK 安装与离线验证见 [开发说明](CONTRIBUTING.md)。
 
 动作只有 `group` 与 `frames`，每帧只有 `t`、`q`：
 

@@ -1,13 +1,18 @@
 """命令入口；文件读取与离线规划不依赖设备 SDK。"""
 
 import argparse
+import json
 import math
+import os
+import select
 import signal
 import sys
-from threading import Event
+from pathlib import Path
+from threading import Event, Thread
 
-from g1_action_studio.motion import load_action, load_start
-from g1_action_studio.preview import run_preview
+from .motion import _keys, _number, load_action, load_start
+from .preview import run_preview
+from .replay import run_replay
 
 
 def positive_number(value: str) -> float:
@@ -17,26 +22,91 @@ def positive_number(value: str) -> float:
     return number
 
 
+def load_gains(path):
+    path = Path(path)
+    try:
+        with path.open(encoding="utf-8") as source:
+            gains = json.load(source)
+        _keys(gains, ("arms", "waist"), "增益配置")
+        for group, values in gains.items():
+            _keys(values, ("hold_kp", "hold_kd", "teach_kp", "teach_kd"), group)
+            for name, value in values.items():
+                values[name] = _number(value, f"{group}.{name}")
+                if values[name] < 0:
+                    raise ValueError(f"{group}.{name} 必须非负")
+        return gains
+    except ValueError as error:
+        raise ValueError(f"{path}: {error}") from error
+
+
+class _TerminalInput:
+    def __init__(self, cancel):
+        self.cancel = cancel
+        self.stop = Event()
+        self.error = None
+
+    def __enter__(self):
+        self.fd = sys.stdin.fileno()
+        self.thread = Thread(target=self._read, name="g1-terminal-input", daemon=False)
+        self.thread.start()
+        return self
+
+    def _read(self):
+        try:
+            while not self.stop.is_set():
+                ready, _, _ = select.select([self.fd], [], [], 0.05)
+                if ready and not os.read(self.fd, 4096):
+                    self.cancel.set()
+                    return
+        except Exception as error:
+            self.error = error
+            self.cancel.set()
+
+    def __exit__(self, kind, error, traceback):
+        self.stop.set()
+        self.thread.join()
+        if self.error is not None:
+            errors = [error, self.error] if error is not None else [self.error]
+            raise ExceptionGroup("终端输入失败", errors)
+
+
+def _error_message(error):
+    if isinstance(error, ExceptionGroup):
+        return "；".join(_error_message(item) for item in error.exceptions)
+    return str(error)
+
+
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(prog="g1-action-studio", description="G1 上肢动作离线预览")
+    parser = argparse.ArgumentParser(prog="g1-action-studio", description="G1 上肢动作预览与回放")
     commands = parser.add_subparsers(dest="command", required=True)
     preview = commands.add_parser("preview", help="预览四种范围的动作及避碰衔接、返回")
-    preview.add_argument("actions", nargs="+", help="group + frames 格式的动作 JSON")
     preview.add_argument("--start", required=True, help="leg_q[12] + upper_q[17] 启动姿态 JSON")
-    preview.add_argument("--speed", type=positive_number, default=1.0, help="动作速度倍率，默认1")
-    preview.add_argument("--transition-seconds", type=positive_number, default=2.0, help="每个连接段时长，默认2秒")
+    replay = commands.add_parser("replay", help="一次接管连续回放并返回启动姿态、交回权重")
+    replay.add_argument("--interface", required=True, help="机器人通信网卡")
+    replay.add_argument("--config", required=True, help="arms 与 waist 两组增益 JSON")
+    replay.add_argument("--execute", action="store_true", required=True, help="明确执行设备回放")
+    for command in (preview, replay):
+        command.add_argument("actions", nargs="+", help="group + frames 格式的动作 JSON")
+        command.add_argument("--speed", type=positive_number, default=1.0, help="动作速度倍率，默认1")
+        command.add_argument("--transition-seconds", type=positive_number, default=2.0, help="每个连接段时长，默认2秒")
     args = parser.parse_args(argv)
     cancel = Event()
     previous_handler = signal.signal(signal.SIGINT, lambda *_: cancel.set())
     try:
         actions = [load_action(path) for path in args.actions]
-        start = load_start(args.start)
-        run_preview(actions, start, args.speed, args.transition_seconds, cancel)
+        if args.command == "preview":
+            start = load_start(args.start)
+            run_preview(actions, start, args.speed, args.transition_seconds, cancel)
+        else:
+            gains = load_gains(args.config)
+            with _TerminalInput(cancel):
+                run_replay(args.interface, actions, gains, args.speed, args.transition_seconds, cancel)
+            print("回放流程完成，零权重发送完成。")
         return 130 if cancel.is_set() else 0
     except InterruptedError:
         return 130
-    except (OSError, ValueError, RuntimeError, ImportError) as error:
-        print(f"错误：{error}", file=sys.stderr)
+    except Exception as error:
+        print(f"错误：{_error_message(error)}", file=sys.stderr)
         return 1
     finally:
         signal.signal(signal.SIGINT, previous_handler)
