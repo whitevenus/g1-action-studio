@@ -4,7 +4,7 @@
 
 ## 实现状态
 
-本地功能、测试和文档已完成。用户已授权通过 `codex/arm7-optional-hand` 分支提交、推送和创建 PR；GitHub CI 结果待远端验证，Issues 尚未关闭。真实机器人没有连接或执行控制命令。
+本地功能、测试和文档已完成，已通过 `codex/arm7-optional-hand` 分支推送并创建 [PR #8](https://github.com/whitevenus/g1-action-studio/pull/8)。GitHub CI 结果以 PR 的当前提交检查为准，Issues 在合入前保持打开。真实机器人没有连接或执行控制命令。
 
 | Issue | 实施结果 | 主要验证证据 |
 | --- | --- | --- |
@@ -22,6 +22,7 @@
 - WSL Ubuntu 22.04、Python 3.11.16、MuJoCo 3.16.0、OMPL 2.0.1：全量129项通过，零跳过，耗时约188秒。
 - Ruff 0.16.8：`ruff check src tests`、`ruff format --check src tests` 均通过。
 - 按项目 CRLF 规范执行的 Git 空白检查通过。
+- 首次远端格式检查发现新增 Python 文件在 Git 中被转换为 LF；新增 `.gitattributes` 明确 Python 检出为 CRLF，与 Ruff 保持一致。从暂存区导出的独立代码副本通过 Ruff 检查及格式检查。
 - 独立 code review 最终没有经源码确认的可执行发现。
 - 一个中途审查发现的测试缩进错误已修正并由最终 Linux 全量测试覆盖；另一个“validate_frames 默认28维”的审查意见与源码及真实14维 E2E 不符，已核实并拒绝。
 - 没有初始化真实 DDS、发送真实电机命令、安装或启动机器人侧手部服务。

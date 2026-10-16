@@ -14,7 +14,7 @@ SPEC： [spec-arm7-optional-hand.md](spec-arm7-optional-hand.md)。本文的 01�
 | 06 | 03、04 | high |
 | 07 | 05、06 | high |
 
-本次只发布任务，不实现业务、不连接设备、不创建 PR，不提交或推送本地文件。
+本发布记录描述最初拆解和发布任务的阶段。后续实施与验证见 [实施记录](implementation-arm7-optional-hand.md)，代码交付见 [PR #8](https://github.com/whitevenus/g1-action-studio/pull/8)。
 
 ## 01：集中控制布局定义，保持既有 Dex3 流程
 
@@ -259,4 +259,4 @@ high
 | [#6](https://github.com/whitevenus/g1-action-studio/issues/6) | 从命令行预览并回放仅手臂动作 | #3、#4 |
 | [#7](https://github.com/whitevenus/g1-action-studio/issues/7) | 在 Linux CI 验证完整流程并交付配置与使用说明 | #5、#6 |
 
-当前可开始：#1。SPEC 和本发布记录仍为本地文件，尚未由本次操作提交或推送。
+发布时可开始 #1；后续实现、SPEC 和本记录已随 PR #8 提交。
