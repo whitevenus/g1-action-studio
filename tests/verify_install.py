@@ -16,7 +16,7 @@ def main():
     start = load_start(examples / "start.json")
     model = ArmModel(start.leg_q)
     sequences = [[group] for group in GROUPS]
-    sequences += [["arms_waist", "left_arm"], ["left_arm", "right_arm"]]
+    sequences += [["arms_waist", "left_arm"], ["left_arm", "right_arm"], ["detour_left_arm"]]
     for groups in sequences:
         actions = [load_action(examples / f"{group}.json") for group in groups]
         trajectory = plan_sequence(actions, start, model, 1.0, 2.0, Event())

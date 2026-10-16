@@ -27,7 +27,7 @@ jobs:
       - name: 项目目录外安装与真实资源验证
         run: |
           python -m venv /tmp/g1-preview-install
-          /tmp/g1-preview-install/bin/pip install dist/*.whl 'mujoco>=3.15,<4'
+          /tmp/g1-preview-install/bin/pip install dist/*.whl 'mujoco>=3.15,<4' 'ompl==2.0.1'
           cd /tmp
           /tmp/g1-preview-install/bin/g1-action-studio --help
           /tmp/g1-preview-install/bin/python "$GITHUB_WORKSPACE/tests/verify_install.py" "$GITHUB_WORKSPACE/examples"

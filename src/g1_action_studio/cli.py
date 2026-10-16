@@ -20,7 +20,7 @@ def positive_number(value: str) -> float:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="g1-action-studio", description="G1 上肢动作离线预览")
     commands = parser.add_subparsers(dest="command", required=True)
-    preview = commands.add_parser("preview", help="预览四种范围的动作及直连衔接、返回")
+    preview = commands.add_parser("preview", help="预览四种范围的动作及避碰衔接、返回")
     preview.add_argument("actions", nargs="+", help="group + frames 格式的动作 JSON")
     preview.add_argument("--start", required=True, help="leg_q[12] + upper_q[17] 启动姿态 JSON")
     preview.add_argument("--speed", type=positive_number, default=1.0, help="动作速度倍率，默认1")

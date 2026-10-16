@@ -1,6 +1,7 @@
 from collections.abc import Iterable, Sequence
 from math import ceil
 from threading import Event
+from time import monotonic
 
 import numpy as np
 
@@ -13,6 +14,9 @@ from .motion import (
     concatenate,
     connection_curve,
 )
+
+SEARCH_SECONDS = 5.0
+SHORTCUT_SECONDS = 1.0
 
 
 class PlanningError(RuntimeError):
@@ -34,6 +38,71 @@ def _critical_times(coefficients: np.ndarray, width: float) -> list[float]:
     return times
 
 
+def _rrt_path(model, a, b, active, cancel):
+    from ompl import base, geometric
+
+    space = base.RealVectorStateSpace(len(active))
+    bounds = base.RealVectorBounds(len(active))
+    for dimension, joint in enumerate(active):
+        bounds.setLow(dimension, float(model.ranges[joint, 0]))
+        bounds.setHigh(dimension, float(model.ranges[joint, 1]))
+    space.setBounds(bounds)
+    setup = geometric.SimpleSetup(space)
+    information = setup.getSpaceInformation()
+
+    def expand(state):
+        q = a.copy()
+        q[active] = [state[index] for index in range(len(active))]
+        return q
+
+    class MotionValidator(base.MotionValidator):
+        def checkMotion(self, first, second):
+            if cancel.is_set():
+                return False
+            try:
+                return model.edge_free(expand(first), expand(second), cancel)
+            except InterruptedError:
+                return False
+
+    setup.setStateValidityChecker(lambda state: not cancel.is_set() and model.valid(expand(state)))
+    information.setup()
+    original_validator = information.getMotionValidator()
+    information.setMotionValidator(MotionValidator(information))
+    try:
+        first, last = space.allocState(), space.allocState()
+        for dimension, joint in enumerate(active):
+            first[dimension], last[dimension] = float(a[joint]), float(b[joint])
+        setup.setStartAndGoalStates(first, last)
+        setup.setPlanner(geometric.RRTConnect(information))
+        deadline = monotonic() + SEARCH_SECONDS
+        termination = base.PlannerTerminationCondition(lambda: cancel.is_set() or monotonic() >= deadline)
+        setup.solve(termination)
+        _cancelled(cancel)
+        problem = setup.getProblemDefinition()
+        if not problem.hasExactSolution():
+            reason = "仅找到近似解" if problem.hasApproximateSolution() else "未找到精确解"
+            raise PlanningError(f"RRTConnect {reason}；起点={a.tolist()}; 终点={b.tolist()}")
+        points = [expand(state) for state in setup.getSolutionPath().getStates()]
+    finally:
+        # 解除 SI 对 Python validator 的引用，避免绑定对象循环持有。
+        information.setMotionValidator(original_validator)
+
+    deadline = monotonic() + SHORTCUT_SECONDS
+    index = 0
+    while index < len(points) - 2 and monotonic() < deadline:
+        _cancelled(cancel)
+        for target in range(len(points) - 1, index + 1, -1):
+            _cancelled(cancel)
+            if monotonic() >= deadline:
+                break
+            if model.edge_free(points[index], points[target], cancel):
+                del points[index + 1 : target]
+                break
+        index += 1
+    _cancelled(cancel)
+    return points
+
+
 def connect(
     model: ArmModel,
     a: np.ndarray,
@@ -43,7 +112,7 @@ def connect(
     cancel: Event,
 ) -> Trajectory | None:
     _cancelled(cancel)
-    active = {index for group in active_groups for index in GROUPS[group]}
+    active = sorted({index for group in active_groups for index in GROUPS[group]})
     inactive = [index for index in range(17) if index not in active]
     if not np.array_equal(a[inactive], b[inactive]):
         raise PlanningError("连接改变了动作组之外的关节")
@@ -53,11 +122,9 @@ def connect(
             raise PlanningError(f"连接{name}无效：{model.last_error}; q={q.tolist()}")
     if np.array_equal(a, b):
         return None
-    if not model.edge_free(a, b, cancel):
-        _cancelled(cancel)
-        raise PlanningError(f"直连受阻：{model.last_error}; 起点={a.tolist()}; 终点={b.tolist()}")
+    points = [a, b] if model.edge_free(a, b, cancel) else _rrt_path(model, a, b, active, cancel)
     _cancelled(cancel)
-    return connection_curve([a, b], seconds)
+    return connection_curve(points, seconds)
 
 
 def check_trajectory(model: ArmModel, trajectory: Trajectory, cancel: Event) -> None:

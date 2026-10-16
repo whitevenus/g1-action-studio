@@ -1,7 +1,7 @@
 # G1 Action Studio
 
 G1 Arm7 上肢动作工具，支持左臂、右臂、双臂、双臂加腰四种范围。
-当前版本实现离线直连预览（#9）；受阻绕行、设备回放和示教依次在 #10–#12 实现。
+当前版本实现四组动作的离线预览及受阻绕行（#9–#10）；设备回放和示教在 #11–#12 实现。
 
 ```sh
 uv sync --extra planning
@@ -10,7 +10,20 @@ uv run g1-action-studio preview examples/right_arm.json --start examples/start.j
 ```
 
 图形预览以 Linux 为交付平台。查看器显示进入、动作、衔接和返回启动姿态，关闭窗口退出，Ctrl+C 取消。
-直连碰撞或曲线越界会直接报错；当前版本不会绕行，也不改写动作。预览只做 FK 显示，不初始化 SDK 或 DDS。
+四组示例每个动作持续8秒，包含明显抬臂、侧展和屈肘；双臂加腰另有左右转腰及小幅俯仰、侧倾。
+肩 Pitch 最大约120°、侧展约86°，腰左右转动各约57°。默认单动作共12秒，上述双动作组合共22秒；只播放一遍，结束后保持启动姿态。
+连接先尝试直连，受阻时用 OMPL RRTConnect 在所选动作组内绕行；没有精确解就报错。
+动作本身碰撞或曲线越界仍会直接报错。预览只做 FK 显示，不初始化 SDK 或 DDS。
+
+左臂绕行示例：从启动姿态直连目标会碰到左腿，程序规划绕行，保持目标4秒后绕行返回；右臂与腰固定。
+
+```sh
+uv run --extra planning g1-action-studio preview examples/detour_left_arm.json --start examples/start.json --transition-seconds 4
+```
+
+进入与返回各4秒，总共12秒。绕行路径可能随搜索变化；折线拐点允许停顿。
+单臂只搜索7维，左右换组开放双臂14维，含腰换组开放17维；搜索最多5秒，随后最多1秒删点，连接总时长仍由 `--transition-seconds` 决定。
+仅连接段会绕行，不能通过重规划改写原动作。
 
 动作只有 `group` 与 `frames`，每帧只有 `t`、`q`：
 
