@@ -39,6 +39,15 @@ def expanded(group, feedback):
     return q
 
 
+def disconnected_return_model(legs):
+    model = ArmModel(legs)
+    ranges = model.ranges.copy()
+    for joint in set(GROUPS["left_arm"]) - {2}:
+        ranges[joint] = HOME[joint] + np.array([-1e-6, 1e-6])
+    model.ranges = ranges
+    return model
+
+
 class PromptOutput(io.StringIO):
     def __init__(self):
         super().__init__()
@@ -300,15 +309,7 @@ class TeachTests(unittest.TestCase):
                 feedback[:7] = HOME[:7]
                 feedback[2] = -2.4
 
-            def narrow_search(legs):
-                model = ArmModel(legs)
-                ranges = model.ranges.copy()
-                for joint in set(GROUPS["left_arm"]) - {2}:
-                    ranges[joint] = HOME[joint] + np.array([-1e-6, 1e-6])
-                model.ranges = ranges
-                return model
-
-            with patch.object(teach, "ArmModel", side_effect=narrow_search):
+            with patch.object(teach, "ArmModel", side_effect=disconnected_return_model):
                 code, _, stderr = self.run_cli(harness)
             self.assertEqual(code, 1)
             self.assertTrue("近似" in stderr or "未找到精确解" in stderr, stderr)

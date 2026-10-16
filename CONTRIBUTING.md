@@ -1,55 +1,62 @@
 # 开发说明
 
-Python 3.11，标准 src 包布局，unittest 与 Ruff。依赖继续用 uv 管理：
+Python 3.11、unittest、Ruff，标准 src 包布局，依赖由 uv.lock 固定。
+
+普通文件/数值层不需要 MuJoCo 或 SDK，Linux 与 Windows 均可运行：
 
 ```sh
-uv sync --extra dev --extra planning
-uv run python -m unittest discover -s tests -v
+uv sync --locked --extra dev
+uv run --no-sync python tests/run_tests.py numerical
 uv tool run ruff==0.16.8 check src tests
 uv tool run ruff==0.16.8 format --check src tests
-uv run python -m build
+uv build --wheel
+uv run --no-sync python tests/verify_wheel.py dist/g1_action_studio-0.1.0-py3-none-any.whl
 ```
 
-普通文件/数值测试不需要 MuJoCo；模型、规划和预览测试需要 planning 依赖，缺失依赖应失败，不用 skip 代替验证。
-图形预览以 Linux 为交付平台，Windows 可执行数值、文件及无窗口模型测试。测试不连接机器人，headless 验证绘制数据而非窗口目视效果。
+数值层覆盖文件、配置、曲线、CLI 用法与 wheel 内容；Linux 另测终端输入，Windows 跳过 Linux 终端用例。它不代表规划、官方报文或完整流程通过。
 
-当前提供 preview、replay、teach。新代码按 PRD/SPEC 从空包写，不恢复旧格式、旧入口、灵巧手或旧回放阈值。
-业务模块保持直接调用：motion 管文件与 PPoly，model 管唯一关节映射和 MuJoCo，planner 管完整曲线与连接，preview 显示同一曲线，robot 管 SDK 和唯一发送循环，replay 与 teach 编排会话，cli 管配置与终端输入。
-不添加转发包装、同值别名、插件框架或临时模式。
-
-Linux 绕行、无解和取消用例可单独运行：
-
-```sh
-uv run python -m unittest discover -s tests -p 'test_rrt.py' -v
-```
-
-成功用例使用真实模型和 RRTConnect，覆盖7/14/17维、最终曲线及固定的非活动关节。
-无解用例将左臂除肩 Yaw 外的搜索范围收窄到启动值附近，让真实模型的碰撞带隔开起终点；真实搜索得到的近似解必须拒绝。
-收窄范围仅用于构造确定无解的测试，生产搜索始终采用模型 XML 全部活动关节的原始范围。另验证搜索及快捷删点期间取消不会返回轨迹。
-
-回放与示教正式测试使用官方 SDK `814556d15970dd2ecf1c9984e845ca02ab07e206`、CycloneDDS 0.10.2 和真实 CRC 库。Linux 安装示例：
+Linux 完整层先安装规划依赖、固定官方 SDK 与 CycloneDDS 0.10.2。SDK 提交为 `814556d15970dd2ecf1c9984e845ca02ab07e206`，使用 editable 安装保留本架构 CRC `.so` 的定位路径：
 
 ```sh
 uv sync --locked --extra dev --extra planning
+project_python="$(uv run --no-sync python -c 'import sys; print(sys.executable)')"
 git clone --depth 1 --branch 0.10.2 https://github.com/eclipse-cyclonedds/cyclonedds.git /tmp/g1-cyclone-src
 cmake -S /tmp/g1-cyclone-src -B /tmp/g1-cyclone-build -DCMAKE_INSTALL_PREFIX=/tmp/g1-cyclone -DCMAKE_INSTALL_LIBDIR=lib -DBUILD_DDSPERF=OFF -DBUILD_TESTING=OFF -DBUILD_EXAMPLES=OFF
 cmake --build /tmp/g1-cyclone-build --parallel 4
 cmake --install /tmp/g1-cyclone-build
-CYCLONEDDS_HOME=/tmp/g1-cyclone uv pip install cyclonedds==0.10.2
+CYCLONEDDS_HOME=/tmp/g1-cyclone uv pip install --python "$project_python" cyclonedds==0.10.2
 git clone https://github.com/unitreerobotics/unitree_sdk2_python.git /tmp/g1-unitree-sdk
 git -C /tmp/g1-unitree-sdk checkout 814556d15970dd2ecf1c9984e845ca02ab07e206
-uv pip install --no-deps -e /tmp/g1-unitree-sdk
-uv run python -m unittest discover -s tests -v
+uv pip install --python "$project_python" --no-deps -e /tmp/g1-unitree-sdk
+uv run --no-sync python tests/run_tests.py full
 ```
 
-SDK 以 editable 安装，保留随附本架构 CRC `.so` 的路径；Python 3.11 的 CycloneDDS 0.10.2 需要上述 native 构建。
-若项目环境通过 `UV_PROJECT_ENVIRONMENT` 放在其他目录，两个 `uv pip install` 也需显式添加 `--python "$UV_PROJECT_ENVIRONMENT/bin/python"`。之后再次同步依赖时使用 `uv sync --inexact` 保留单独安装的 SDK/CycloneDDS。
-普通文件、配置和数值测试可单独运行 `test_motion.py`、`test_cli.py`；SDK 报文、完整回放、示教及生命周期测试在 Linux 安装上述依赖后全部运行，缺失依赖应失败。
-测试替换 Factory 和通道构造，禁止创建网络实体；官方消息、CRC、序列化、SciPy、MuJoCo 与 OMPL 均执行真实实现。
-示教测试用真实管道终端驱动两次回车，核对四组反馈采样、增益切换、冻结保存、真实返回规划，以及 EOF、取消、保存和规划失败；发送与输入线程均须 join。
+`run_tests.py full` 执行 SPEC T01–T09；依赖缺失、测试失败或任何 skip 都返回非零，不能用跳过代替验证。SDK 单独安装后使用 `uv run --no-sync`；再次同步依赖可用 `uv sync --inexact --locked --extra dev --extra planning` 保留 SDK。`project_python` 也适用于通过 `UV_PROJECT_ENVIRONMENT` 放在项目外的环境。
 
-关节映射集中于 model。model 顶层不加载 MuJoCo；planner 不依赖设备；曲线碰撞检测只在规划阶段进行。
-模型与 viewer 各持自己的 MjData；viewer 使用 FK，不调用 mj_step 生成另一条运动。
+干净安装的完整贯通（仍在 Linux，沿用上面构建的 CycloneDDS 与固定 SDK）：
 
-项目提示与说明使用中文，标识符与第三方许可保持原文。Python 使用双引号、四空格、120字符行宽和 CRLF。
-验证 wheel 时必须从项目目录外加载包和模型资源，不能依赖源码工作目录。不要提交个人录制、凭据、重写备份或厂商SDK。
+```sh
+project_dir="$PWD"
+uv build --wheel
+uv export --locked --extra planning --no-emit-project --no-hashes --output-file /tmp/g1-planning.txt
+uv venv --python 3.11 /tmp/g1-installed
+uv pip install --python /tmp/g1-installed/bin/python dist/g1_action_studio-0.1.0-py3-none-any.whl -r /tmp/g1-planning.txt
+CYCLONEDDS_HOME=/tmp/g1-cyclone uv pip install --python /tmp/g1-installed/bin/python cyclonedds==0.10.2
+uv pip install --python /tmp/g1-installed/bin/python --no-deps -e /tmp/g1-unitree-sdk
+cd /tmp
+/tmp/g1-installed/bin/g1-action-studio --help
+/tmp/g1-installed/bin/python -m g1_action_studio --help
+/tmp/g1-installed/bin/python "$project_dir/tests/verify_wheel.py" "$project_dir/dist/g1_action_studio-0.1.0-py3-none-any.whl" --installed
+/tmp/g1-installed/bin/python "$project_dir/tests/verify_install.py" "$project_dir/examples"
+/tmp/g1-installed/bin/python "$project_dir/tests/run_tests.py" workflow
+```
+
+贯通测试通过四次实际 teach CLI 和两次回车生成四种动作文件，原样输入 preview/replay；验证动态腰切换到左臂、统一 q/dq、home17、零权重、取消、保存后回位无精确解及资源回收。文件临时独立创建和清理，不用手写理想动作代替录制。无解复用真实模型的窄搜索盒夹具，生产始终采用 XML 原始搜索范围。
+
+测试保留 Action 读写、SciPy、MuJoCo、OMPL、官方消息、CRC 和序列化，替换 SDK Factory/通道、时钟、终端事件与 headless viewer；禁止创建 DDS 网络实体。headless 检查真实 MjData 绘制目标，不能宣称完成图形窗口目视或真机验收。实际增益、动态平衡、固定末端几何对应关系及设备跟踪行为需现场事实，本轮不执行机器人动作。
+
+GitHub CI 的 numerical 层独立运行数值/文件和安装检查；preview 层按锁文件准备完整 Linux 依赖、运行零 skip 的全套测试，再从项目外安装 wheel 跑真实录制产物贯通。wheel 内容白名单与资产指纹检查确认八个业务模块、模型、网格、来源和许可齐全，不包含测试、数据、备份、旧工具或厂商 SDK。
+
+业务模块保持直接调用：motion 管文件与 PPoly，model 管唯一映射和几何，planner 管曲线与连接，preview 显示同一曲线，robot 管 SDK 与唯一发送循环，teach/replay 编排会话，cli 管配置与输入。模型与 viewer 各持 MjData；viewer 使用 FK，不调用 mj_step 生成另一条运动。
+
+项目提示与说明使用中文，标识符与第三方许可保持原文；Python 使用双引号、四空格、120 字符行宽和 CRLF。不恢复旧格式、旧入口、灵巧手、阈值或 settle，不添加转发包装、临时模式或第二套执行器。不要提交个人录制、凭据、重写备份或第三方 SDK。旧文档及图示见 [历史资料](docs/README.md)。
