@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "g1-action-studio"
 version = "0.1.0"
-description = "G1 单臂、双臂及双臂加腰动作的离线预览"
+description = "G1 单臂、双臂及双臂加腰动作的规划、预览与回放"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {file = "LICENSE"}
