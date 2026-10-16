@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 from unittest.mock import patch
 
 from g1_action_studio import cli
@@ -75,6 +75,29 @@ class GainTests(unittest.TestCase):
                     self.assertEqual(error.exception.code, 2)
             replay.assert_not_called()
 
+    def test_teach_requires_execute_and_rejects_unsupported_groups_and_options(self):
+        base = [
+            "teach",
+            "--interface",
+            "offline-test",
+            "--group",
+            "arms_waist",
+            "--config",
+            str(EXAMPLES / "gains.json"),
+            "--output",
+            str(self.path),
+        ]
+        cases = [base, base + ["--execute", "--group", "hand"]]
+        cases += [base + ["--execute", flag, "old"] for flag in ("--side", "--stage", "--profile", "--speed")]
+        cases += [base + ["--execute", "--transition-seconds", value] for value in ("0", "-1", "nan", "inf", "bad")]
+        with patch.object(cli, "run_teach", side_effect=AssertionError("用法错误不得连接设备")) as teach:
+            for arguments in cases:
+                with self.subTest(arguments=arguments), contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit) as error:
+                        cli.main(arguments)
+                    self.assertEqual(error.exception.code, 2)
+            teach.assert_not_called()
+
 
 @unittest.skipUnless(sys.platform == "linux", "终端设备会话以 Linux 为交付平台")
 class TerminalInputTests(unittest.TestCase):
@@ -97,6 +120,33 @@ class TerminalInputTests(unittest.TestCase):
     def test_normal_input_stop_does_not_cancel_success(self):
         with cli._TerminalInput(self.cancel) as terminal:
             self.assertTrue(terminal.thread.is_alive())
+        self.assertFalse(terminal.thread.is_alive())
+        self.assertFalse(self.cancel.is_set())
+
+    def test_enter_queued_before_first_prompt_is_discarded(self):
+        prompted, entered = Event(), Event()
+        self.writer.write("\n\n")
+        self.writer.flush()
+        with cli._TerminalInput(self.cancel) as terminal:
+
+            def wait_for_prompt():
+                terminal.wait_enter("ready")
+                entered.set()
+
+            waiter = Thread(target=wait_for_prompt, daemon=False)
+            with patch("builtins.print", side_effect=lambda *_args, **_kwargs: prompted.set()):
+                waiter.start()
+                try:
+                    self.assertTrue(prompted.wait(1))
+                    self.assertFalse(entered.wait(0.1), "提示前的回车不能开始录制")
+                    self.writer.write("\n")
+                    self.writer.flush()
+                    self.assertTrue(entered.wait(1))
+                finally:
+                    if not entered.is_set():
+                        self.cancel.set()
+                    waiter.join()
+        self.assertFalse(waiter.is_alive())
         self.assertFalse(terminal.thread.is_alive())
         self.assertFalse(self.cancel.is_set())
 
