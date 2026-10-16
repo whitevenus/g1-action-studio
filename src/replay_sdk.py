@@ -6,13 +6,13 @@ from threading import Lock
 from .constants import (
     ARM_COMMAND_TOPIC,
     ARM_SLOTS,
+    DEX3_LAYOUT,
     DT,
     EXPECTED_MODE,
     EXPECTED_MOTOR_MODES,
     HAND_COMMAND_TOPICS,
     HAND_MOTOR_IDS,
     HAND_STATE_TOPICS,
-    JOINT_COUNT,
     LOWSTATE_TOPIC,
     STATE_TIMEOUT,
     WEIGHT_SLOT,
@@ -20,7 +20,7 @@ from .constants import (
 from .trajectory import finite_vector
 
 
-def validate_snapshot(snapshot, now, timeout=STATE_TIMEOUT) -> dict:
+def validate_snapshot(snapshot, now, timeout=STATE_TIMEOUT, *, layout=DEX3_LAYOUT) -> dict:
     """示教与回放共用反馈检查；时钟由调用方传入。"""
     if not isinstance(snapshot, dict):
         raise RuntimeError("手臂或手指反馈状态缺失")
@@ -35,7 +35,7 @@ def validate_snapshot(snapshot, now, timeout=STATE_TIMEOUT) -> dict:
         values = snapshot.get(key)
         if (
             not isinstance(values, (tuple, list))
-            or len(values) != JOINT_COUNT
+            or len(values) != layout.joint_count
             or any(type(v) not in (int, float) or not math.isfinite(v) for v in values)
         ):
             raise RuntimeError("手臂或手指关节状态无效")
@@ -43,7 +43,8 @@ def validate_snapshot(snapshot, now, timeout=STATE_TIMEOUT) -> dict:
 
 
 class ReplaySdkPort:
-    def __init__(self, sdk, clock):
+    def __init__(self, sdk, clock, *, layout=DEX3_LAYOUT):
+        self.layout = layout
         self.sdk, self.clock = sdk, clock
         self.publisher = self.subscriber = self.arm_subscriber = None
         self.lock = Lock()
@@ -60,7 +61,9 @@ class ReplaySdkPort:
             self.subscriber.Init(self._on_state, 10)
             self.arm_subscriber = sdk.ChannelSubscriber(ARM_COMMAND_TOPIC, sdk.LowCmdType)
             self.arm_subscriber.Init(self._on_command, 10)
-            for side in HAND_MOTOR_IDS:
+            if layout.hand_model and hasattr(sdk, "initialize_hand_types"):
+                sdk.initialize_hand_types()
+            for side in HAND_MOTOR_IDS if layout.hand_model else ():
                 subscriber = sdk.ChannelSubscriber(HAND_STATE_TOPICS[side], sdk.HandStateType)
                 self.hand_resources.append(subscriber)
                 subscriber.Init(lambda message, side=side: self._on_hand(side, message), 10)
@@ -115,6 +118,8 @@ class ReplaySdkPort:
 
     def snapshot(self):
         with self.lock:
+            if self.layout.hand_model is None:
+                return None if self.latest is None else dict(self.latest)
             left, right = self.hand_states["left"], self.hand_states["right"]
             if self.latest is None or left is None or right is None:
                 return None
@@ -145,11 +150,11 @@ class ReplaySdkPort:
             raise RuntimeError("运控或手臂服务不符合候选条件")
 
     def start_publisher(self):
-        if self.hand_profile is None:
+        if self.layout.hand_model and self.hand_profile is None:
             raise RuntimeError("缺少手部增益参数")
         self.publisher = self.sdk.ChannelPublisher(ARM_COMMAND_TOPIC, self.sdk.LowCmdType)
         self.publisher.Init()
-        for side in HAND_MOTOR_IDS:
+        for side in HAND_MOTOR_IDS if self.layout.hand_model else ():
             publisher = self.sdk.ChannelPublisher(HAND_COMMAND_TOPICS[side], self.sdk.HandCmdType)
             self.hand_resources.append(publisher)
             publisher.Init()
@@ -158,10 +163,16 @@ class ReplaySdkPort:
     def write(
         self, positions, kp, kd, weight, *, side=None, selected_kp=None, selected_kd=None, hand_kp=None, hand_kd=None
     ):
-        positions = finite_vector(list(positions))  # 在任何通道发送前核对完整28关节目标。
+        positions = finite_vector(
+            list(positions), size=self.layout.joint_count
+        )  # 在任何通道发送前核对当前布局的完整目标。
         state = self.snapshot()
         publisher, profile = self.publisher, self.hand_profile
-        if state is None or publisher is None or profile is None or len(self.hand_publishers) != 2:
+        if (
+            state is None
+            or publisher is None
+            or (self.layout.hand_model and (profile is None or len(self.hand_publishers) != 2))
+        ):
             raise RuntimeError("手臂/手指反馈或发布器尚未就绪")
         command = self.sdk.LowCmd()
         command.mode_pr = 0
@@ -177,7 +188,7 @@ class ReplaySdkPort:
         command.crc = self.sdk.CRC().Crc(command)
         if publisher.Write(command) is not True:
             return False
-        for hand_side, ids in HAND_MOTOR_IDS.items():
+        for hand_side, ids in HAND_MOTOR_IDS.items() if self.layout.hand_model else ():
             command = self.sdk.HandCmd()
             offset = 14 if hand_side == "left" else 21
             selected = hand_side == side and hand_kp is not None

@@ -4,7 +4,21 @@ import json
 import math
 from pathlib import Path
 
-from .constants import DT, PROFILE, PROFILE_SCHEMA
+from .constants import (
+    ACTION_SCHEMA,
+    ACTION_SCHEMA_V2,
+    ARM_SLOTS,
+    DEX3_LAYOUT,
+    DT,
+    PLAN_SCHEMA,
+    PLAN_SCHEMA_V2,
+    PROFILE,
+    PROFILE_SCHEMA,
+    PROFILE_SCHEMA_V2,
+    RECORDING_SCHEMA,
+    RECORDING_SCHEMA_V2,
+    get_layout,
+)
 
 
 def read_json(path):
@@ -30,40 +44,73 @@ def _require_numbers(data, keys, message, *, allow_zero=False):
             raise ValueError(message.format(key))
 
 
+def document_layout(data, kind):
+    """只在文件边界解析布局；旧格式不能伪装成另一种设备。"""
+    schemas = {
+        "profile": (PROFILE_SCHEMA, PROFILE_SCHEMA_V2),
+        "recording": (RECORDING_SCHEMA, RECORDING_SCHEMA_V2),
+        "action": (ACTION_SCHEMA, ACTION_SCHEMA_V2),
+        "plan": (PLAN_SCHEMA, PLAN_SCHEMA_V2),
+    }
+    old, new = schemas[kind]
+    if not isinstance(data, dict) or data.get("schema") not in (old, new):
+        raise ValueError("不支持的 {} 格式".format(kind))
+    layout = get_layout(data.get("target_profile"))
+    if data["schema"] == old:
+        if layout != DEX3_LAYOUT:
+            raise ValueError("旧格式仅支持 Dex3-1 布局")
+        hand = data.get("collision_hand_model", "dex3-1")
+    else:
+        hand = data.get("collision_hand_model")
+    if hand != "dex3-1":
+        raise ValueError("collision_hand_model 目前仅支持 dex3-1")
+    if kind != "profile" and (
+        data.get("arm_slots") != list(ARM_SLOTS) or data.get("joint_names") != list(layout.joint_names)
+    ):
+        raise ValueError("关节名称、顺序或 arm_slots 与布局不匹配")
+    return layout
+
+
+def normalize_document(data, kind):
+    document_layout(data, kind)
+    schema = {
+        "recording": RECORDING_SCHEMA_V2,
+        "action": ACTION_SCHEMA_V2,
+        "plan": PLAN_SCHEMA_V2,
+        "profile": PROFILE_SCHEMA_V2,
+    }[kind]
+    provenance = {"source_schema": data["schema"]} if data["schema"] != schema else {}
+    return {**data, **provenance, "schema": schema, "collision_hand_model": "dex3-1"}
+
+
 def validate_hold_gains(data):
     """示教与回放使用同一套机型和保持增益要求。"""
-    if not isinstance(data, dict) or data.get("schema") != PROFILE_SCHEMA or data.get("target_profile") != PROFILE:
-        raise ValueError("参数文件的格式或目标机型不匹配")
-    _require_numbers(data, ("hold_kp", "hold_kd", "hand_hold_kp", "hand_hold_kd"), "保持参数 {} 必须是正的有限数")
+    layout = document_layout(data, "profile")
+    hand_keys = ("hand_hold_kp", "hand_hold_kd", "hand_teach_kp", "hand_teach_kd")
+    if layout.hand_model is None and any(key in data for key in hand_keys):
+        raise ValueError("仅手臂布局不使用 hand_* 增益")
+    keys = ("hold_kp", "hold_kd") + (("hand_hold_kp", "hand_hold_kd") if layout.hand_model else ())
+    _require_numbers(data, keys, "保持参数 {} 必须是正的有限数")
     if data["hold_kp"] > 60 or data["hold_kd"] > 3:
         raise ValueError("保持增益超过候选程序上限")
 
 
 def validate_teach_profile(data):
     validate_hold_gains(data)
-    _require_numbers(data, ("teach_kp", "teach_kd", "hand_teach_kd"), "示教参数 {} 必须是正的有限数")
-    _require_numbers(data, ("hand_teach_kp",), "手指示教刚度须为非负数且小于手指保持刚度", allow_zero=True)
+    layout = document_layout(data, "profile")
+    _require_numbers(data, ("teach_kp", "teach_kd"), "示教参数 {} 必须是正的有限数")
+    if layout.hand_model:
+        _require_numbers(data, ("hand_teach_kd",), "示教参数 {} 必须是正的有限数")
+        _require_numbers(data, ("hand_teach_kp",), "手指示教刚度须为非负数且小于手指保持刚度", allow_zero=True)
     if data["teach_kp"] > data["hold_kp"]:
         raise ValueError("示教刚度不得大于保持刚度")
     if data["teach_kd"] > data["hold_kd"]:
         raise ValueError("示教阻尼不得大于保持阻尼")
-    if data["hand_teach_kp"] >= data["hand_hold_kp"]:
+    if layout.hand_model and data["hand_teach_kp"] >= data["hand_hold_kp"]:
         raise ValueError("手指示教刚度须小于手指保持刚度")
-    if data["hand_teach_kd"] > data["hand_hold_kd"]:
+    if layout.hand_model and data["hand_teach_kd"] > data["hand_hold_kd"]:
         raise ValueError("手指示教阻尼不得大于保持阻尼")
-    return {
-        key: float(data[key])
-        for key in (
-            "hold_kp",
-            "hold_kd",
-            "teach_kp",
-            "teach_kd",
-            "hand_hold_kp",
-            "hand_hold_kd",
-            "hand_teach_kp",
-            "hand_teach_kd",
-        )
-    }
+    return normalize_document(data, "profile")
 
 
 def load_teach_profile(path):
@@ -74,8 +121,6 @@ def validate_replay_profile(profile):
     required = (
         "hold_kp",
         "hold_kd",
-        "hand_hold_kp",
-        "hand_hold_kd",
         "max_tracking_error_rad",
         "initial_pose_tolerance_rad",
         "return_tolerance_rad",
@@ -87,6 +132,9 @@ def validate_replay_profile(profile):
     )
     if not isinstance(profile, dict):
         raise ValueError("回放参数必须是对象")
+    layout = get_layout(profile.get("target_profile", PROFILE))
+    if layout.hand_model:
+        required += ("hand_hold_kp", "hand_hold_kd")
     optional = tuple(key for key in ("max_speed_rad_s", "max_offset_rad") if key in profile)
     _require_numbers(profile, required + optional, "回放参数 {} 必须为正的有限数")
     if not DT <= profile["recovery_release_s"] <= 120 or not DT <= profile["settle_timeout_s"] <= 120:
@@ -103,4 +151,4 @@ def validate_replay_profile(profile):
 def load_replay_profile(path):
     data = read_json(path)
     validate_hold_gains(data)
-    return validate_replay_profile(data)
+    return validate_replay_profile(normalize_document(data, "profile"))

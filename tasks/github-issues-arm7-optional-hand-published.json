@@ -1,0 +1,63 @@
+{
+  "repository": "whitevenus/g1-action-studio",
+  "issues": {
+    "01": {
+      "number": 1,
+      "title": "集中控制布局定义，保持既有 Dex3 流程",
+      "url": "https://github.com/whitevenus/g1-action-studio/issues/1",
+      "blocked_by": []
+    },
+    "02": {
+      "number": 2,
+      "title": "制作并读取仅手臂动作，同时兼容旧 Dex3 文件",
+      "url": "https://github.com/whitevenus/g1-action-studio/issues/2",
+      "blocked_by": [
+        1
+      ]
+    },
+    "03": {
+      "number": 3,
+      "title": "使用完整手部活动包络规划仅手臂动作",
+      "url": "https://github.com/whitevenus/g1-action-studio/issues/3",
+      "blocked_by": [
+        2
+      ]
+    },
+    "04": {
+      "number": 4,
+      "title": "在无手部能力的 SDK 下完成手臂反馈和命令收发",
+      "url": "https://github.com/whitevenus/g1-action-studio/issues/4",
+      "blocked_by": [
+        2
+      ]
+    },
+    "05": {
+      "number": 5,
+      "title": "完成仅手臂示教、录制和避碰回位",
+      "url": "https://github.com/whitevenus/g1-action-studio/issues/5",
+      "blocked_by": [
+        3,
+        4
+      ]
+    },
+    "06": {
+      "number": 6,
+      "title": "从命令行预览并回放仅手臂动作",
+      "url": "https://github.com/whitevenus/g1-action-studio/issues/6",
+      "blocked_by": [
+        3,
+        4
+      ]
+    },
+    "07": {
+      "number": 7,
+      "title": "在 Linux CI 验证完整流程并交付配置与使用说明",
+      "url": "https://github.com/whitevenus/g1-action-studio/issues/7",
+      "blocked_by": [
+        5,
+        6
+      ]
+    }
+  },
+  "native_dependencies_verified": true
+}

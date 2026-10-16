@@ -1,11 +1,13 @@
 """离线回放调度与数值筛查；不导入 SDK，不生成可发送的电机命令。"""
 
+import hashlib
 import math
 import xml.etree.ElementTree as ET
 from bisect import bisect_right
 from collections.abc import Sequence
 
-from .constants import ARM_SLOTS, COLLISION_MODEL, DT, JOINT_NAMES, PLAN_SCHEMA, PROFILE
+from .config import document_layout
+from .constants import ARM_SLOTS, COLLISION_MODEL, DEX3_LAYOUT, DT, PLAN_SCHEMA_V2
 from .trajectory import (
     Frame,
     finite_vector,
@@ -19,7 +21,7 @@ from .trajectory import (
 )
 
 
-def load_limits(path):
+def load_limits(path, *, layout=DEX3_LAYOUT):
     try:
         root = ET.parse(path).getroot()
     except ET.ParseError as error:
@@ -29,7 +31,7 @@ def load_limits(path):
         raise ValueError("关节模型必须明确使用弧度")
     nodes = {node.get("name"): node for node in root.findall(".//joint")}
     limits = []
-    for name in JOINT_NAMES:
+    for name in layout.joint_names:
         node = nodes.get(name + "_joint")
         values = [] if node is None else node.get("range", "").split()
         if len(values) != 2:
@@ -78,7 +80,7 @@ def build_schedule(
 ):
     """完整正常路径；返回显式基线。weight 仅是离线分析值。"""
     validate_frames(frames)
-    baseline = finite_vector(baseline)
+    baseline = finite_vector(baseline, size=len(frames[0]["q"]))
     durations = [_steps(value) for value in (takeover, enter, return_seconds, release)]
     if frames[-1]["t"] > 540:
         raise ValueError("动作序列时长不得超过 540 秒")
@@ -143,12 +145,13 @@ def sample_schedule(frames: Sequence[Frame], elapsed: float, times: Sequence[flo
     }
 
 
-def screen_schedule(frames, limits, max_velocity, max_acceleration):
+def screen_schedule(frames, limits, max_velocity, max_acceleration, *, layout=DEX3_LAYOUT):
     for value in (max_velocity, max_acceleration):
         if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
             raise ValueError("离线速度和加速度阈值必须是正的有限数")
-    if len(limits) != len(JOINT_NAMES):
-        raise ValueError("必须提供双臂和双手全部 28 个关节范围")
+    if len(limits) != layout.joint_count:
+        raise ValueError("必须提供布局的完整关节范围")
+    validate_frames(frames, size=layout.joint_count)
     motion = joint_motion(frames)
     computed = metrics(frames, motion)
     violations = []
@@ -158,7 +161,7 @@ def screen_schedule(frames, limits, max_velocity, max_acceleration):
         per_joint.append(
             {
                 "joint_index": offset,
-                "name": JOINT_NAMES[offset],
+                "name": layout.joint_names[offset],
                 "range_rad": [low, high],
                 "min_rad": min(values),
                 "max_rad": max(values),
@@ -197,11 +200,16 @@ def create_plan(
     collision_check=False,
 ):
     """离线预览和现场规划共用；现场基线由只读反馈提供。"""
-    q = finite_vector(baseline["q"])
-    limits = load_limits(COLLISION_MODEL)
     actions = data if isinstance(data, list) else [data]
     if not actions:
         raise ValueError("至少需要一个动作")
+    layout = document_layout(actions[0], "action")
+    if any(document_layout(action, "action") != layout for action in actions):
+        raise ValueError("动作控制布局不一致")
+    if baseline.get("target_profile") != layout.profile_id:
+        raise ValueError("规划基线与动作布局不匹配")
+    q = finite_vector(baseline["q"], size=layout.joint_count)
+    limits = load_limits(COLLISION_MODEL, layout=layout)
     if side is not None and side not in ("left", "right"):
         raise ValueError("回放侧必须为 left 或 right")
     if any(action["kind"] == "sequence" and side != action["side"] for action in actions):
@@ -212,7 +220,7 @@ def create_plan(
         if speed_scale is not None:
             motion = retime_frames(motion, speed_scale, smooth=action["kind"] == "single")
         if side is not None:
-            motion = hold_other_side(motion, q, side)
+            motion = hold_other_side(motion, q, side, layout=layout)
         motions.append(motion)
     collision_model = None
     body_pose = None
@@ -225,7 +233,7 @@ def create_plan(
         body_pose = list(baseline.get("body_q", settings["body_q"]))
         from .collision import CollisionModel, find_path, parameterize_path
 
-        collision_model = CollisionModel(body_pose)
+        collision_model = CollisionModel(body_pose, layout=layout)
         margin = settings["clearance_m"]
         motion = list(motions[0])
         for following in motions[1:]:
@@ -240,16 +248,17 @@ def create_plan(
     else:
         motion = motions[0]
     frames, phases = build_schedule(motion, q, takeover, enter, return_seconds, release, enter_motion, return_motion)
-    screening = screen_schedule(frames, limits, max_velocity, max_acceleration)
+    screening = screen_schedule(frames, limits, max_velocity, max_acceleration, layout=layout)
     collision = None if collision_model is None else collision_model.check_motion(frames, margin)
     return {
-        "schema": PLAN_SCHEMA,
+        "schema": PLAN_SCHEMA_V2,
         "qualification": "offline_only_not_executable",
         "hardware_enabled": False,
         "status": "offline_numerical_rejected" if screening["violations"] else "offline_numerical_pass",
-        "target_profile": PROFILE,
+        "target_profile": layout.profile_id,
+        "collision_hand_model": "dex3-1",
         "arm_slots": list(ARM_SLOTS),
-        "joint_names": list(JOINT_NAMES),
+        "joint_names": list(layout.joint_names),
         "action_code": actions[0]["action_code"],
         "action_version": actions[0]["action_version"],
         "source_trajectory_sha256": actions[0]["trajectory_sha256"],
@@ -257,7 +266,11 @@ def create_plan(
             {"code": action["action_code"], "trajectory_sha256": action["trajectory_sha256"]} for action in actions
         ],
         "baseline": baseline,
-        "model": {"file_name": COLLISION_MODEL.name, "limits_rad": [list(pair) for pair in limits]},
+        "model": {
+            "file_name": COLLISION_MODEL.name,
+            "xml_sha256": hashlib.sha256(COLLISION_MODEL.read_bytes()).hexdigest(),
+            "limits_rad": [list(pair) for pair in limits],
+        },
         "thresholds": {"max_velocity_rad_s": max_velocity, "max_acceleration_rad_s2": max_acceleration},
         "phases": phases,
         "frames": frames,

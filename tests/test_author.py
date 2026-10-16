@@ -48,7 +48,7 @@ class ActionTests(unittest.TestCase):
             original = source.read_bytes()
             action = load_action(source)
             self.assertEqual(source.read_bytes(), original)
-        self.assertEqual(set(action["source"]), {"file_name", "sha256"})
+        self.assertEqual(set(action["source"]), {"file_name", "sha256", "schema"})
         self.assertEqual(len(action["frames"]), 52)
         self.assertEqual([frame["t"] for frame in action["frames"]], [round(i * 0.02, 6) for i in range(52)])
         self.assertEqual(action["frames"][0]["q"], data["samples"][0]["q"])

@@ -13,7 +13,7 @@ from fake_sdk import SimulatedSDK, VirtualClock
 from g1_action_studio.author import load_action
 from g1_action_studio.cli import main
 from g1_action_studio.config import write_json
-from g1_action_studio.constants import ACTION_SCHEMA, ARM_SLOTS, JOINT_NAMES, PROFILE
+from g1_action_studio.constants import ARM_SLOTS, JOINT_NAMES, PROFILE
 from g1_action_studio.live_replay import replay
 from g1_action_studio.transition import plan_transition
 
@@ -83,7 +83,7 @@ class ActionFlowTests(ActionFixtures, unittest.TestCase):
         action = self.root / "built.json"
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(main(["build", str(self.source), "--output", str(action)]), 0)
-        self.assertEqual(load_action(action)["schema"], ACTION_SCHEMA)
+        self.assertEqual(load_action(action)["schema"], "g1-action-studio-action-v2")
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as exit:
             main(["audit", str(action)])
         self.assertEqual(exit.exception.code, 2)
