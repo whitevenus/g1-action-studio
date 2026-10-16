@@ -2,8 +2,6 @@
 
 > 历史资料：本文及关联 HTML/SVG/PNG 描述重写前实现，不适用于新版。当前入口与模块见 [README](../README.md) 和 [SPEC](../tasks/spec-project-rebuild.md)。
 
-> 2026-10-16 更新：控制布局由 profile 显式选择，支持 Arm7 14关节或 Arm7 + Dex3-1 28关节。旧图中的固定28关节描述仅适用于 Dex3 模式。仅手臂模式仍检查实体手完整活动范围，算法见 [手部包络说明](hand-envelope.md)。文件入口兼容 Dex3 v1 并归一化，新文件输出型号无关的 v2。
-
 [打开可点击的项目架构图](architecture.html) · [查看架构图图片](architecture.png) · [下载 SVG](architecture.svg)
 
 源码直接放在 `src/`。`pyproject.toml` 将它映射为安装后的 `g1_action_studio` 包，不需要额外的同名目录。
