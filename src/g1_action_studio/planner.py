@@ -1,9 +1,9 @@
 from collections.abc import Iterable, Sequence
-from math import ceil
 from threading import Event
 from time import monotonic
 
 import numpy as np
+from scipy.interpolate import BPoly, PPoly
 
 from .model import ANGULAR_RESOLUTION, GROUPS, UPPER_JOINTS, ArmModel, within_range
 from .motion import (
@@ -130,32 +130,55 @@ def connect(
 def check_trajectory(model: ArmModel, trajectory: Trajectory, cancel: Event) -> None:
     polynomial = trajectory.polynomial
     degree = polynomial.c.shape[0] - 1
-    for interval, (left, right) in enumerate(zip(polynomial.x, polynomial.x[1:])):
+    lower, upper = model.ranges.T
+    for begin in range(0, len(polynomial.x) - 1, 512):
         _cancelled(cancel)
-        width = float(right - left)
-        coefficients = polynomial.c[:, interval, :]
-        velocity = np.arange(degree, 0, -1)[:, None] * coefficients[:-1]
-        acceleration = np.arange(degree - 1, 0, -1)[:, None] * velocity[:-1]
-        max_velocity = 0.0
-        for joint, (lower, upper) in enumerate(model.ranges):
+        end = min(begin + 512, len(polynomial.x) - 1)
+        widths = np.diff(polynomial.x[begin : end + 1])
+        coefficients = polynomial.c[:, begin:end]
+        # 换基后曲线位于控制点凸包内，导数控制点给出速度上界。
+        batch = PPoly(coefficients, polynomial.x[begin : end + 1], extrapolate=False)
+        control = BPoly.from_power_basis(batch).c
+        ambiguous = (control.min(axis=0) < lower) | (control.max(axis=0) > upper)
+        # 凸包只能快速确认合法；包络触及范围外时仍求精确极值，不据此误拒动作。
+        for offset, joint in np.argwhere(ambiguous):
             _cancelled(cancel)
-            for local_time in _critical_times(velocity[:, joint], width):
-                value = float(np.polyval(coefficients[:, joint], local_time))
-                if not within_range(value, lower, upper):
-                    q = np.asarray(polynomial(left + local_time))
+            values = coefficients[:, offset, joint]
+            velocity = np.arange(degree, 0, -1) * values[:-1]
+            for local_time in _critical_times(velocity, float(widths[offset])):
+                value = float(np.polyval(values, local_time))
+                if not within_range(value, lower[joint], upper[joint]):
+                    interval = begin + offset
+                    time = polynomial.x[interval] + local_time
+                    q = np.asarray(polynomial(time))
                     raise PlanningError(
-                        f"区间{interval} t={left + local_time:.9g} "
+                        f"区间{interval} t={time:.9g} "
                         f"关节{UPPER_JOINTS[joint]}越界：{value:.9g} "
-                        f"不在[{lower:.9g}, {upper:.9g}]; q={q.tolist()}"
+                        f"不在[{lower[joint]:.9g}, {upper[joint]:.9g}]; q={q.tolist()}"
                     )
-            for local_time in _critical_times(acceleration[:, joint], width):
-                value = abs(float(np.polyval(velocity[:, joint], local_time)))
-                max_velocity = max(max_velocity, value)
-        subdivisions = max(1, ceil(max_velocity * width / ANGULAR_RESOLUTION))
-        for time in np.linspace(left, right, subdivisions + 1):
+        # width * max|dq/dt| 的保守上界；仍覆盖全部 knots，并对较大运动加密。
+        travel = degree * np.max(np.abs(np.diff(control, axis=0)), axis=(0, 2))
+        subdivisions = np.maximum(1, np.ceil(travel / ANGULAR_RESOLUTION)).astype(np.intp)
+        times = [polynomial.x[begin + 1 : end + 1]]
+        if begin == 0:
+            times.append(polynomial.x[:1])
+        for offset in np.flatnonzero(subdivisions > 1):
+            interval = begin + offset
+            times.append(
+                np.linspace(polynomial.x[interval], polynomial.x[interval + 1], subdivisions[offset] + 1)[1:-1]
+            )
+        times = np.sort(np.concatenate(times))
+        positions = polynomial(times)
+        if begin == 0:
+            positions[0] = trajectory.first_q
+        if end == len(polynomial.x) - 1:
+            positions[-1] = trajectory.last_q
+        for time, q in zip(times, positions):
             _cancelled(cancel)
-            q, _ = trajectory.sample(float(time))
             if not model.valid(q):
+                interval = min(
+                    len(polynomial.x) - 2, max(0, int(np.searchsorted(polynomial.x, time, side="right") - 1))
+                )
                 raise PlanningError(f"区间{interval} t={time:.9g}无效：{model.last_error}; q={q.tolist()}")
     _cancelled(cancel)
 

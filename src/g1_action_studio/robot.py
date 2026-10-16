@@ -144,7 +144,14 @@ class RobotSession:
                 ):
                     if self._samples and received <= self._samples[-1][0]:
                         raise ValueError("示教反馈接收时间必须严格递增")
-                    self._samples.append((received, pose.upper_q[self._selected].copy()))
+                    # 每个 20ms 时间格只记录首条真实反馈，快照仍随每条反馈更新。
+                    period = round(DT * 1_000_000_000)
+                    if (
+                        not self._samples
+                        or (received - self._record_started_ns) // period
+                        > (self._samples[-1][0] - self._record_started_ns) // period
+                    ):
+                        self._samples.append((received, pose.upper_q[self._selected].copy()))
                 self._condition.notify_all()
         except Exception as error:
             self._failed(error)

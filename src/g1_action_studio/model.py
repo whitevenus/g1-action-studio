@@ -89,7 +89,7 @@ class ArmModel:
         data.qpos[:] = self.model.qpos0
         data.qpos[self.leg_qpos] = self.leg_q
         data.qpos[self.upper_qpos] = upper_q
-        self._mj.mj_forward(self.model, data)
+        self._mj.mj_fwdPosition(self.model, data)
 
     def valid(self, upper_q: Sequence[float]) -> bool:
         self.last_error = None

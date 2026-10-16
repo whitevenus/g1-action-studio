@@ -108,6 +108,32 @@ class ModelTests(unittest.TestCase):
             if self.robot.model.geom_contype[geom] == self.robot.model.geom_conaffinity[geom] == 0:
                 self.assertFalse(self.robot.affected_geoms[geom])
 
+    def test_position_stage_preserves_full_forward_geometry_and_contacts(self):
+        robot = ArmModel(np.array([-0.1, 0, 0, 0.2, -0.1, 0] * 2))
+        reference = mujoco.MjData(robot.model)
+        left = HOME.copy()
+        left[:7] = [0.561, 0.238, -1.245, 0.563, 1.853, 0.501, -1.141]
+        both = left.copy()
+        both[7:14] = [-0.5, -0.6, 0.4, 1.2, 0.3, -0.2, 0.2]
+        waist = both.copy()
+        waist[14:] = [0.3, 0.1, -0.1]
+        penetrating_contacts = 0
+        for q in (HOME, left, (HOME + left) / 2, both, waist):
+            with self.subTest(q=q.tolist()):
+                robot.set_pose(q)
+                reference.qpos[:] = robot.data.qpos
+                mujoco.mj_forward(robot.model, reference)
+                for field in ("xpos", "xmat", "geom_xpos", "geom_xmat", "site_xpos", "site_xmat", "subtree_com"):
+                    np.testing.assert_array_equal(getattr(robot.data, field), getattr(reference, field))
+                contacts = [(c.geom1, c.geom2, c.dist) for c in robot.data.contact]
+                expected = [(c.geom1, c.geom2, c.dist) for c in reference.contact]
+                self.assertEqual(contacts, expected)
+                penetrating_contacts += sum(
+                    distance <= 0 and (robot.affected_geoms[first] or robot.affected_geoms[second])
+                    for first, second, distance in contacts
+                )
+        self.assertGreater(penetrating_contacts, 0)
+
     def test_range_and_cancelled_edge(self):
         invalid = HOME.copy()
         invalid[5] = self.robot.ranges[5, 1] + 0.001

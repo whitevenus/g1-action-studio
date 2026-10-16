@@ -9,7 +9,7 @@ import numpy as np
 from fake_channels import HOME, Channels, Clock
 
 from g1_action_studio import robot
-from g1_action_studio.model import UPPER_SLOTS
+from g1_action_studio.model import GROUPS, UPPER_SLOTS
 from g1_action_studio.motion import connection_curve
 
 GAINS = {
@@ -30,6 +30,68 @@ def causes(error):
     if isinstance(error, ExceptionGroup):
         return [cause for item in error.exceptions for cause in causes(item)]
     return [error]
+
+
+class RecordingTests(unittest.TestCase):
+    @contextmanager
+    def recording(self, group):
+        clock = SimpleNamespace(now=1_000_000_000)
+        session = robot.RobotSession("offline0", GAINS, Event())
+        message = SimpleNamespace(motor_state=[SimpleNamespace(q=0.0) for _ in range(29)])
+
+        def emit(offset_ns, value):
+            clock.now = 1_000_000_000 + offset_ns
+            for index, slot in enumerate(UPPER_SLOTS):
+                message.motor_state[slot].q = float(HOME[index] + value)
+            session._on_feedback(message)
+
+        with patch.object(robot.time, "monotonic_ns", lambda: clock.now):
+            emit(0, 0)
+            session._phase = "FOLLOW"
+            session._group = group
+            session._selected = list(GROUPS[group])
+            session.begin_recording()
+            yield session, emit
+
+    def test_one_khz_feedback_records_50_hz_for_every_group(self):
+        for group, width in {"left_arm": 7, "right_arm": 7, "arms": 14, "arms_waist": 17}.items():
+            with self.subTest(group=group), self.recording(group) as (session, emit):
+                for millisecond in range(1, 28_002):
+                    emit(millisecond * 1_000_000, millisecond / 100_000)
+                action, _ = session.end_recording()
+
+                self.assertEqual(action.group, group)
+                self.assertEqual(action.q.shape, (1401, width))
+                saved_ms = np.r_[1, np.arange(20, 28_002, 20)]
+                np.testing.assert_array_equal(action.t, (saved_ms - 1) / 1000)
+                expected_q = HOME[list(GROUPS[group])] + saved_ms[:, None] / 100_000
+                np.testing.assert_array_equal(action.q, expected_q)
+                self.assertIsNone(session._publisher)
+                self.assertIsNone(session._sender)
+
+    def test_recording_keeps_real_jitter_and_updates_feedback_between_saved_frames(self):
+        with self.recording("left_arm") as (session, emit):
+            for offset, value in (
+                (1_000_000, 0.01),
+                (19_900_000, 0.02),
+                (20_000_000, 0.03),
+                (39_900_000, 0.04),
+                (40_100_000, 0.05),
+                (60_000_000, 0.06),
+                (123_000_000, 0.07),
+                (123_100_000, 0.08),
+            ):
+                emit(offset, value)
+                self.assertEqual(session._feedback[0], 1_000_000_000 + offset)
+                np.testing.assert_array_equal(session._feedback[1].upper_q, HOME + value)
+            action, frozen = session.end_recording()
+
+        np.testing.assert_array_equal(action.t, [0, 0.019, 0.0391, 0.059, 0.122])
+        np.testing.assert_array_equal(action.q, HOME[:7] + np.array([0.01, 0.03, 0.05, 0.06, 0.07])[:, None])
+        np.testing.assert_array_equal(frozen[:7], action.q[-1])
+        np.testing.assert_array_equal(frozen[7:], HOME[7:])
+        np.testing.assert_array_equal(session._target_q, frozen)
+        np.testing.assert_array_equal(session._feedback[1].upper_q, HOME + 0.08)
 
 
 @unittest.skipUnless(sys.platform == "linux", "真实 Unitree SDK 生命周期测试的交付平台为 Linux")
@@ -212,23 +274,29 @@ class RobotTests(unittest.TestCase):
             session = robot.RobotSession("offline0", GAINS, Event())
             target = HOME.copy()
             target[0] += 0.2
-            play_records = []
+            trajectory = connection_curve([HOME, target], 1)
+            original_sample = trajectory.sample
+            samples = []
 
-            def write(record):
-                if session._phase == "PLAY":
-                    play_records.append(record)
-                    if len(play_records) == 1:
-                        clock.advance(2.0)
-                return True
+            def sample(curve, elapsed):
+                q, dq = original_sample(elapsed)
+                samples.append((elapsed, q.copy(), dq.copy()))
+                if len(samples) == 1:
+                    clock.advance(2.0)
+                return q, dq
 
             with session:
                 session.acquire()
-                channels.on_write = write
-                session.play(connection_curve([HOME, target], 1))
-            self.assertEqual(len(play_records), 2)
-            np.testing.assert_array_equal(positions(play_records[0].command), HOME)
-            np.testing.assert_array_equal(positions(play_records[-1].command), target)
-            np.testing.assert_array_equal(velocities(play_records[-1].command), np.zeros(17))
+                with patch.object(type(trajectory), "sample", sample):
+                    session.play(trajectory)
+            self.assertEqual(len(samples), 2)
+            self.assertEqual(samples[0][0], 0)
+            self.assertGreaterEqual(samples[-1][0], trajectory.duration)
+            np.testing.assert_array_equal(samples[0][1], HOME)
+            np.testing.assert_array_equal(samples[-1][1], target)
+            np.testing.assert_array_equal(samples[-1][2], np.zeros(17))
+            np.testing.assert_array_equal(positions(channels.commands[-1]), target)
+            np.testing.assert_array_equal(velocities(channels.commands[-1]), np.zeros(17))
 
     def test_play_cancel_freezes_last_successful_target_instead_of_returning_home(self):
         with self.environment() as (channels, _):
