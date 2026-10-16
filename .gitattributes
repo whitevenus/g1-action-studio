@@ -1,2 +1,7 @@
 # Keep Python checkouts consistent with the Ruff line-ending setting on every OS.
 *.py text eol=crlf
+
+# Keep upstream model assets byte-for-byte identical to the pinned revision.
+src/g1_action_studio/resources/g1_29dof.xml -text -whitespace
+src/g1_action_studio/resources/LICENSE -text
+src/g1_action_studio/resources/meshes/*.STL -text

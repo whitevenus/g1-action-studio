@@ -13,3 +13,4 @@ data/*
 .env
 .env.*
 !.env.example
+.loop-state.json

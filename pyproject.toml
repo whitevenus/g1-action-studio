@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "g1-action-studio"
 version = "0.1.0"
-description = "宇树 G1 Arm7 + Dex3-1 拖动示教、动作制作与回放工具"
+description = "G1 单臂、双臂及双臂加腰动作的离线预览"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {file = "LICENSE"}
 authors = [{name = "whitevneus"}]
-dependencies = []
+dependencies = ["numpy>=1.26,<3", "scipy>=1.16.3,<1.17"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
@@ -29,13 +29,15 @@ planning = [
 g1-action-studio = "g1_action_studio.cli:main"
 
 [tool.setuptools]
-packages = ["g1_action_studio"]
-package-dir = {g1_action_studio = "src"}
 include-package-data = false
 license-files = ["LICENSE", "LICENSE-UNITREE", "LICENSE-UNITREE-MODEL", "LICENSE-APACHE-2.0"]
 
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["g1_action_studio"]
+
 [tool.setuptools.package-data]
-g1_action_studio = ["resources/collision/*.xml", "resources/collision/*.json", "resources/collision/meshes/*.STL"]
+g1_action_studio = ["resources/*.xml", "resources/*.md", "resources/LICENSE", "resources/meshes/*.STL"]
 
 [tool.ruff]
 target-version = "py311"
