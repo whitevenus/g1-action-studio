@@ -1,0 +1,44 @@
+{
+  "repository": "whitevenus/g1-action-studio",
+  "issues": {
+    "01": {
+      "number": 9,
+      "title": "从空包重写，并离线预览四种范围的直连动作序列",
+      "url": "https://github.com/whitevenus/g1-action-studio/issues/9",
+      "blocked_by": []
+    },
+    "02": {
+      "number": 10,
+      "title": "让受阻动作连接自动绕行，并保持所选关节范围",
+      "url": "https://github.com/whitevenus/g1-action-studio/issues/10",
+      "blocked_by": [
+        9
+      ]
+    },
+    "03": {
+      "number": 11,
+      "title": "一次接管连续回放不同范围的动作，并统一交回",
+      "url": "https://github.com/whitevenus/g1-action-studio/issues/11",
+      "blocked_by": [
+        10
+      ]
+    },
+    "04": {
+      "number": 12,
+      "title": "两次回车同步录制单臂、双臂或双臂加腰，保存后避碰回位",
+      "url": "https://github.com/whitevenus/g1-action-studio/issues/12",
+      "blocked_by": [
+        11
+      ]
+    },
+    "05": {
+      "number": 13,
+      "title": "在干净安装中贯通四组录制产物、混合预览与回放，并交付完整 CI",
+      "url": "https://github.com/whitevenus/g1-action-studio/issues/13",
+      "blocked_by": [
+        12
+      ]
+    }
+  },
+  "native_dependencies_verified": true
+}
