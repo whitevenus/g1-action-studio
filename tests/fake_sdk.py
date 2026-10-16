@@ -13,7 +13,6 @@ from g1_action_studio.constants import (
     HAND_COMMAND_TOPICS,
     HAND_MOTOR_IDS,
     HAND_STATE_TOPICS,
-    JOINT_COUNT,
     LOWSTATE_TOPIC,
 )
 from g1_action_studio.executor import execute_replay
@@ -61,7 +60,7 @@ class SimulatedSDK:
         if not math.isfinite(response_s) or response_s <= 0:
             raise ValueError("模拟响应时间须为正的有限数")
         self.clock, self.response_s = clock, response_s
-        self.q, self.dq = list(baseline), [0.0] * JOINT_COUNT
+        self.q, self.dq = list(baseline), [0.0] * len(baseline)
         self.body_q = [0.0] * ARM_SLOTS[0]
         self.target = list(baseline)
         self.weight = 0.0
@@ -181,6 +180,8 @@ class SimulatedSDK:
         for subscriber in self.subscribers:
             if not subscriber.closed and subscriber.topic == LOWSTATE_TOPIC:
                 subscriber.callback(message)
+        if len(self.q) == 14:
+            return
         for side, ids in HAND_MOTOR_IDS.items():
             if side in self.drop_hands:
                 continue

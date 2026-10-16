@@ -2,12 +2,17 @@
 
 import math
 
-from .constants import COLLISION_MODEL, DT, JOINT_COUNT, JOINT_NAMES, SIDE_OFFSETS
+from .constants import COLLISION_MODEL, DEX3_LAYOUT, DT
 from .trajectory import finite_vector, interpolate_positions, smoothstep
 
 
 class CollisionModel:
-    def __init__(self, body_q=None):
+    def __init__(self, body_q=None, *, layout=DEX3_LAYOUT, collision_hand_model="dex3-1"):
+        if collision_hand_model != "dex3-1":
+            raise ValueError("collision_hand_model 目前仅支持 dex3-1")
+        self.layout = layout
+        self.hand_geometry = {}
+        self.envelope_cache = {}
         try:
             import mujoco
             import numpy as np
@@ -15,9 +20,13 @@ class CollisionModel:
             raise ImportError('避碰检查需要 MuJoCo 3.15+；请安装 pip install -e ".[planning]"') from error
         self.mj, self.np = mujoco, np
         self.model = mujoco.MjModel.from_xml_path(str(COLLISION_MODEL))
+        if layout.hand_model is None:
+            from .hand_envelope import hand_geometry
+
+            self.hand_geometry = hand_geometry(mujoco, self.model)
         self.data = mujoco.MjData(self.model)
         m = self.model
-        self.joints = [m.joint(name + "_joint").id for name in JOINT_NAMES]
+        self.joints = [m.joint(name + "_joint").id for name in layout.joint_names]
         # 双臂和双手关节的角度存储位置
         self.addresses = m.jnt_qposadr[self.joints]
         # 双臂和双手关节的限位（copy独立数组）
@@ -32,7 +41,7 @@ class CollisionModel:
             self.data.qpos[m.jnt_qposadr[joint]] = value
         self.body_q = body_q
         # 找出所有手臂和手指部件
-        arm_bodies = {m.jnt_bodyid[j] for j in self.joints}
+        arm_bodies = {m.jnt_bodyid[j] for j in self.joints} | {m.geom_bodyid[g] for g in self.hand_geometry}
         # 找出特殊安装区域（躯干、肩；肘部、腕部；....），间隙为0
         mount_housings = set()
         for side in ("left", "right"):
@@ -55,10 +64,15 @@ class CollisionModel:
                 # 两边都不是手臂或手指时，不进行检查。
                 if ba not in arm_bodies and bb not in arm_bodies:
                     continue
-                # 直接相连的关节外壳属于安装区域，不互相检查。
+                names = [m.geom(a).name, m.geom(b).name]
+                if (
+                    self.hand_geometry
+                    and all("_hand_" in name for name in names)
+                    and names[0].split("_")[0] == names[1].split("_")[0]
+                ):
+                    continue  # 同手活动包络的内部重叠，不作为外部碰撞。
                 if ba == bb or m.body_parentid[ba] == bb or m.body_parentid[bb] == ba:
                     continue
-                names = [m.geom(a).name, m.geom(b).name]
                 self.pairs.append((a, b))
                 # 手部内部空间很小，检查穿透，不套用手与躯干之间的2厘米间隙。
                 same_hand = names[0].split("_")[0] == names[1].split("_")[0] and all(
@@ -66,7 +80,7 @@ class CollisionModel:
                 )
                 self.mount_pairs.append(frozenset(names) in mount_housings or same_hand)
         # 位移上界为半径 × 转角；半径包含网格偏移和所有下游连杆。
-        reach = np.zeros((JOINT_COUNT, m.ngeom))
+        reach = np.zeros((layout.joint_count, m.ngeom))
         for column, joint in enumerate(self.joints):
             for geom in range(m.ngeom):
                 body = m.geom_bodyid[geom]
@@ -84,9 +98,9 @@ class CollisionModel:
 
     # 确认关节数目、是有限数值、没有超过关节限位
     def validate(self, q):
-        q = finite_vector(list(q))
+        q = finite_vector(list(q), size=self.layout.joint_count)
         if any(not low <= value <= high for value, (low, high) in zip(q, self.limits)):
-            raise ValueError("关节数目、是有限数值、没有超过关节限位")
+            raise ValueError("姿态超出碰撞模型关节范围")
         return q
 
     def check_motion(self, frames, margin):
@@ -102,7 +116,15 @@ class CollisionModel:
             mount_gap = min(mount_gap, check["mount_gap_m"])
             if index and not self.edge_clear(frames[index - 1]["q"], frame["q"], margin):
                 raise ValueError("完整动作在 {:.2f}s 帧间无法证明无碰撞".format(frame["t"]))
-        return {"minimum_clearance_m": clearance, "minimum_mount_gap_m": mount_gap}
+        return {
+            "minimum_clearance_m": clearance,
+            "minimum_mount_gap_m": mount_gap,
+            "hand_collision_policy": "measured_joints" if self.layout.hand_model else "full_range_envelope",
+            "envelope_algorithm": None if self.layout.hand_model else "joint_interval_mesh_union_v1",
+            "envelope_parameters": None
+            if self.layout.hand_model
+            else {"node_budget": 4096, "max_depth": 24, "numerical_margin_m": 0.0001},
+        }
 
     # 写入双臂关节姿态并进行正向运动学计算各个零部件位置
     def _position(self, q):
@@ -113,12 +135,42 @@ class CollisionModel:
         m, d = self.model, self.data
         a, b = self.pairs.T
         gaps = self.np.linalg.norm(d.geom_xpos[a] - d.geom_xpos[b], axis=1) - m.geom_rbound[a] - m.geom_rbound[b]
-        distances = self.np.broadcast_to(cutoffs + 0.0001, len(self.pairs)).copy()
-        # 先批量粗筛，只对距离较近的几何对查询凸包距离。
-        for index in self.np.flatnonzero(gaps < distances):
-            ga, gb = self.pairs[index]
-            distances[index] = self.mj.mj_geomDistance(m, d, ga, gb, float(distances[index]), None)
-        if not self.np.isfinite(distances).all():
+        distances = self.np.broadcast_to(cutoffs + 0.0002, len(self.pairs)).copy()
+        # 已知几何批量粗筛；未知手型必须检查连续关节区间，不能按某个手型粗筛。
+        thresholds = self.np.broadcast_to(cutoffs, len(self.pairs))
+        from .hand_envelope import swept_distance
+
+        for index, (ga, gb) in enumerate(self.pairs):
+            ga, gb = int(ga), int(gb)
+            if ga in self.hand_geometry or gb in self.hand_geometry:
+                names = [m.geom(g).name for g in (ga, gb)]
+                cache_key = None
+                # 同侧手与腕的相对几何只依赖腕角，不依赖肩肘或机身姿态。
+                side = names[0].split("_")[0]
+                if (
+                    side in ("left", "right")
+                    and all(name.startswith(side + "_") for name in names)
+                    and any("_wrist_" in name for name in names)
+                ):
+                    offset = 4 if side == "left" else 11
+                    cache_key = (
+                        ga,
+                        gb,
+                        float(thresholds[index]),
+                        tuple(self.data.qpos[self.addresses[offset : offset + 3]]),
+                    )
+                if cache_key is not None and cache_key in self.envelope_cache:
+                    distance = self.envelope_cache[cache_key]
+                else:
+                    distance = swept_distance(
+                        self.mj, m, d, ga, gb, float(thresholds[index]) + 0.0001, self.hand_geometry
+                    )
+                    if cache_key is not None:
+                        self.envelope_cache[cache_key] = distance
+                distances[index] = distance
+            elif gaps[index] < distances[index]:
+                distances[index] = self.mj.mj_geomDistance(m, d, ga, gb, float(distances[index]), None)
+        if self.np.isnan(distances).any() or self.np.isposinf(distances).any():
             raise ValueError("碰撞距离计算出现非有限值")
         return distances - 0.0001  # 为距离查询的数值误差留出余量。
 
@@ -126,7 +178,7 @@ class CollisionModel:
         """非安装区最小距离、安装区间隙和首个不合格几何对。"""
         q = self.validate(q)
         self._position(q)
-        distances = self._distances(cutoff)
+        distances = self._distances(self.np.where(self.mount_pairs, 0, margin) if self.hand_geometry else cutoff)
         bad = self.np.flatnonzero(distances < self.np.where(self.mount_pairs, 0, margin))
         pair = None if not len(bad) else [self.model.geom(int(g)).name for g in self.pairs[bad[0]]]
         return {
@@ -165,12 +217,12 @@ def find_path(model, start, end, side, margin=0.02, timeout=5.0):
     except ImportError as error:
         raise ImportError("避碰规划需要 OMPL 2.0.1；请在 Linux Python 3.11 环境安装 .[planning]") from error
     start, end = model.validate(start), model.validate(end)
-    if side not in SIDE_OFFSETS or not 0.001 <= margin <= 0.10:
+    if side not in ("left", "right") or not 0.001 <= margin <= 0.10:
         raise ValueError("side 须为 left/right；避碰余量须为 0.001–0.10 米")
     if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout < 0:
         raise ValueError("规划时间预算须为非负有限数")
-    selected = SIDE_OFFSETS[side]
-    if any(start[i] != end[i] for i in range(JOINT_COUNT) if i not in selected):
+    selected = model.layout.indices(side)
+    if any(start[i] != end[i] for i in range(model.layout.joint_count) if i not in selected):
         raise ValueError("过渡时另一侧手臂必须保持同一姿态")
     for label, q in [("开始", start), ("结束", end)]:
         check = model.clearance(q, margin)

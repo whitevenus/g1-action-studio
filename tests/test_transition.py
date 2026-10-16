@@ -162,7 +162,8 @@ class TransitionTests(unittest.TestCase):
                 row["q"] = collision
             source.write_text(json.dumps(data))
             with self.assertRaisesRegex(ValueError, "完整动作"):
-                plan_transition(source, EXAMPLES / "action-b.json", output, max_velocity=1000, max_acceleration=1e6)
+                # 用相邻的合法端点直连，确保验证动作内部碰撞，不依赖随机绕行搜索成功。
+                plan_transition(source, source, output, max_velocity=1000, max_acceleration=1e6)
             self.assertFalse(output.exists())
 
 

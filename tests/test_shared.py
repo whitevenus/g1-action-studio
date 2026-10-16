@@ -44,7 +44,15 @@ class SharedBehaviorTests(unittest.TestCase):
         with patch.object(Path, "read_text", side_effect=[text, "{}"]) as reader:
             result = load_replay_profile(path)
         reader.assert_called_once()
-        self.assertEqual(result, json.loads(text))
+        self.assertEqual(
+            result,
+            {
+                **json.loads(text),
+                "schema": "g1-action-studio-control-profile-v2",
+                "collision_hand_model": "dex3-1",
+                "source_schema": json.loads(text)["schema"],
+            },
+        )
 
     def test_replay_profile_checks_both_gain_limits_and_feedback_thresholds(self):
         path = Path(__file__).parents[1] / "examples/profiles/replay.json"

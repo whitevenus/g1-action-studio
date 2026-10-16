@@ -87,7 +87,7 @@ class TeachTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "反馈"):
             validate_snapshot(None, 10.0)
         for key, value in (
-            ("at", 9.0),
+            ("at", 8.9),
             ("at", float("nan")),
             ("mode_machine", 4),
             ("motor_modes", (0,) * 14),

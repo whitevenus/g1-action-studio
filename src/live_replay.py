@@ -6,18 +6,19 @@ from pathlib import Path
 from threading import Event
 
 from .author import load_action
-from .config import dump_json, load_replay_profile
-from .constants import ARM_SLOTS, PROFILE
+from .config import document_layout, dump_json, load_replay_profile
+from .constants import ARM_SLOTS, DEX3_LAYOUT
 from .executor import execute_replay
 from .replay import create_plan
 from .replay_sdk import ReplaySdkPort, validate_snapshot
 from .unitree_binding import create_sdk
 
 
-def _baseline(q, provenance, body_q=None):
+def _baseline(q, provenance, body_q=None, *, layout=DEX3_LAYOUT):
     return {
         "schema": "g1-arm7-replay-baseline-v1",
-        "target_profile": PROFILE,
+        "target_profile": layout.profile_id,
+        "collision_hand_model": "dex3-1",
         "arm_slots": list(ARM_SLOTS),
         "q": list(q),
         "provenance": provenance,
@@ -41,15 +42,16 @@ def _plan(actions, baseline, profile, speed_scale, side, error_prefix="离线轨
 
 
 def _execute(interface, actions, profile, speed_scale, side, stop):
-    port = ReplaySdkPort(create_sdk(interface), time)
+    layout = document_layout(profile, "profile")
+    port = ReplaySdkPort(create_sdk(interface), time, layout=layout)
     try:
         if not port.wait_ready(5.0, stop):
             raise RuntimeError("等待初始状态超时或操作员已请求停止")
-        state = validate_snapshot(port.snapshot(), time.monotonic())
+        state = validate_snapshot(port.snapshot(), time.monotonic(), layout=layout)
         # 接管和最终回位均使用本次反馈，另一侧全程保持此位置。
         if state.get("body_q") is None:
             raise RuntimeError("避碰回放需要腿/腰的当前姿态反馈")
-        baseline = _baseline(state["q"], "本次执行前 rt/lowstate 实测姿态", state.get("body_q"))
+        baseline = _baseline(state["q"], "本次执行前 rt/lowstate 实测姿态", state.get("body_q"), layout=layout)
         plan = _plan(actions, baseline, profile, speed_scale, side, error_prefix="当前姿态生成的回放计划")
         print(
             "现场规划完成：{} 臂单次回放，目标序列 {:.2f} 秒；先执行接管前预检。".format(
@@ -82,9 +84,12 @@ def replay(interface, source, profile_path, output, side=None, speed_scale=0.5, 
     if any(action["kind"] == "sequence" and side != action["side"] for action in actions):
         raise ValueError("组合动作只能按制作时的回放侧执行")
     profile = load_replay_profile(profile_path)
+    layout = document_layout(profile, "profile")
+    if any(document_layout(action, "action") != layout for action in actions):
+        raise ValueError("动作与回放参数的布局不匹配")
     # 预览用首帧；执行只根据当前反馈规划一次，在发布命令前自动检查。
     if not execute:
-        baseline = _baseline(actions[0]["frames"][0]["q"], "录制首帧，仅供离线预览")
+        baseline = _baseline(actions[0]["frames"][0]["q"], "录制首帧，仅供离线预览", layout=layout)
         plan = _plan(actions, baseline, profile, speed_scale, side)
     # 提前独占新报告路径，避免发送指令后才发现输出文件不能创建。
     with Path(output).open("x", encoding="utf-8") as stream:
@@ -114,6 +119,11 @@ def replay(interface, source, profile_path, output, side=None, speed_scale=0.5, 
             speed_scale=speed_scale,
             source_files=[path.name for path in sources],
             execution_profile=profile,
+            target_profile=layout.profile_id,
+            controlled_joint_count=layout.joint_count,
+            hand_control_enabled=layout.hand_model is not None,
+            collision_hand_model="dex3-1",
+            hand_collision_policy="measured_joints" if layout.hand_model else "full_range_envelope",
         )
         dump_json(report, stream)
     plan_metrics = report.get("plan", {}).get("metrics", {})

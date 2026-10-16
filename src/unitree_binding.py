@@ -48,20 +48,26 @@ class UnitreeReplaySDK:
     def __init__(self):
         from unitree_sdk2py.core import channel
         from unitree_sdk2py.idl.default import (
-            unitree_hg_msg_dds__HandCmd_,
             unitree_hg_msg_dds__LowCmd_,
         )
-        from unitree_sdk2py.idl.unitree_hg.msg.dds_ import HandCmd_, HandState_, LowCmd_, LowState_
+        from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_
         from unitree_sdk2py.utils.crc import CRC
 
         # 类型交给 Channel，默认工厂只负责构造带 35 个电机槽位的实例。
         self.LowCmdType, self.LowStateType = LowCmd_, LowState_
         self.LowCmd = unitree_hg_msg_dds__LowCmd_
-        self.HandCmd, self.HandCmdType, self.HandStateType = unitree_hg_msg_dds__HandCmd_, HandCmd_, HandState_
         self.CRC = CRC
         self.channel = channel
         self.service_clients = None
         self.network_initialized = False
+
+    def initialize_hand_types(self):
+        if hasattr(self, "HandCmdType"):
+            return
+        from unitree_sdk2py.idl.default import unitree_hg_msg_dds__HandCmd_
+        from unitree_sdk2py.idl.unitree_hg.msg.dds_ import HandCmd_, HandState_
+
+        self.HandCmd, self.HandCmdType, self.HandStateType = unitree_hg_msg_dds__HandCmd_, HandCmd_, HandState_
 
     def initialize_network(self, interface, domain=0, *, allow_network=False):
         """真机回放的显式网络边界；离线入口不会调用此方法。"""

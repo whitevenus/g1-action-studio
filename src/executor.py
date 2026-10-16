@@ -2,14 +2,12 @@
 
 import math
 
-from .config import validate_replay_profile
+from .config import document_layout, normalize_document, validate_replay_profile
 from .constants import (
     ARM_SLOTS,
     DT,
-    JOINT_COUNT,
-    JOINT_NAMES,
-    PLAN_SCHEMA,
     PROFILE,
+    get_layout,
 )
 from .replay import sample_schedule, screen_schedule
 from .replay_sdk import validate_snapshot
@@ -21,12 +19,9 @@ class Cancelled(RuntimeError):
 
 
 def validate_plan(plan):
+    layout = document_layout(plan, "plan")
     if (
         not isinstance(plan, dict)
-        or plan.get("schema") != PLAN_SCHEMA
-        or plan.get("target_profile") != PROFILE
-        or plan.get("arm_slots") != list(ARM_SLOTS)
-        or plan.get("joint_names") != list(JOINT_NAMES)
         or plan.get("hardware_enabled") is not False
         or plan.get("qualification") != "offline_only_not_executable"
         or plan.get("status") != "offline_numerical_pass"
@@ -36,13 +31,17 @@ def validate_plan(plan):
     if len(frames) > 30001 or plan["schedule_sha256"] != frame_digest(frames):
         raise ValueError("回放序列长度或摘要无效")
     limits = plan["model"]["limits_rad"]
-    if len(limits) != JOINT_COUNT or any(
+    if len(limits) != layout.joint_count or any(
         len(pair) != 2 or any(type(x) not in (int, float) or not math.isfinite(x) for x in pair) or pair[0] >= pair[1]
         for pair in limits
     ):
         raise ValueError("回放计划关节范围无效")
     screening = screen_schedule(
-        frames, limits, plan["thresholds"]["max_velocity_rad_s"], plan["thresholds"]["max_acceleration_rad_s2"]
+        frames,
+        limits,
+        plan["thresholds"]["max_velocity_rad_s"],
+        plan["thresholds"]["max_acceleration_rad_s2"],
+        layout=layout,
     )
     if screening["violations"]:
         raise ValueError("回放计划重新筛查失败")
@@ -76,7 +75,11 @@ def validate_plan(plan):
 def execute_replay(plan, profile, port_factory, clock, stop):
     """端口负责 SDK 边界；运行结果只报告发送和反馈，不宣称控制权已交接。"""
     profile = validate_replay_profile(profile)
+    plan = normalize_document(plan, "plan")
     frames, limits = validate_plan(plan)
+    layout = document_layout(plan, "plan")
+    if get_layout(profile.get("target_profile", PROFILE)) != layout:
+        raise ValueError("回放参数与计划布局不匹配")
     times = [frame["t"] for frame in frames]
     release_index = next(i for i, frame in enumerate(frames) if frame["phase"] == "release")
     return_end = times[release_index - 1]
@@ -97,7 +100,7 @@ def execute_replay(plan, profile, port_factory, clock, stop):
 
     def feedback():
         nonlocal last_state_at
-        state = validate_snapshot(port.snapshot(), clock.monotonic(), profile["state_timeout_s"])
+        state = validate_snapshot(port.snapshot(), clock.monotonic(), profile["state_timeout_s"], layout=layout)
         at = state["at"]
         if last_state_at is not None and at < last_state_at:
             raise RuntimeError("状态时间戳倒退")
@@ -269,7 +272,14 @@ def execute_replay(plan, profile, port_factory, clock, stop):
         "release_sent": release_sent,
         "recovery_release_sent": recovery_release_sent,
         "hand_release_sent": False,
-        "hand_finish": "手部无权重释放接口；关闭发布器不证明手指已卸力或保持",
+        "target_profile": layout.profile_id,
+        "controlled_joint_count": layout.joint_count,
+        "hand_control_enabled": layout.hand_model is not None,
+        "collision_hand_model": "dex3-1",
+        "hand_collision_policy": "measured_joints" if layout.hand_model else "full_range_envelope",
+        "hand_finish": "手部无权重释放接口；关闭发布器不证明手指已卸力或保持"
+        if layout.hand_model
+        else "手部控制未启用",
         "handover_confirmed": False,
         "requires_operator": bool(cleanup_errors) or (bool(errors) and control_attempted),
         "errors": errors,

@@ -11,7 +11,7 @@ from .config import dump_json, read_json, write_json
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="g1-action-studio",
-        description="G1 Arm7 + Dex3-1 动作制作工具；teach/replay --execute 会发送手臂和手指命令",
+        description="G1 Arm7 动作制作工具；profile 选择仅手臂或 Dex3-1，--execute 才发送所选命令",
     )
     parser.add_argument("--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -20,7 +20,7 @@ def main(argv=None):
     teach.add_argument("interface", help="DDS 网卡，例如 eth0")
     teach.add_argument("--side", choices=("left", "right"), required=True)
     teach.add_argument("--output", required=True, help="保存动作文件")
-    teach.add_argument("--profile", required=True, help="手臂和手指的保持/示教增益 JSON")
+    teach.add_argument("--profile", required=True, help="控制布局与保持/示教增益 JSON")
     teach.add_argument("--execute", action="store_true", help="显式开启真机控制与录制")
 
     check = commands.add_parser("preflight", help="只读保存运控与状态消息观测报告")
@@ -82,10 +82,11 @@ def main(argv=None):
             summary = replay(
                 args.interface,
                 args.source,
-                args.profile,
-                args.side,
-                args.speed_scale,
-                args.execute,
+                profile_path=args.profile,
+                output=args.output,
+                side=args.side,
+                speed_scale=args.speed_scale,
+                execute=args.execute,
             )
         elif args.command == "transition":
             from .transition import plan_transition

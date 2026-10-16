@@ -21,4 +21,8 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m pip install '.[planning]'
+      - name: Arm7 complete offline user flow (no dependency skips)
+        env:
+          G1_REQUIRE_PLANNING: '1'
+        run: python -m unittest discover -s tests -p 'test_arm7_flow.py' -v
       - run: python -m unittest discover -s tests -v

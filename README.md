@@ -1,6 +1,29 @@
 # G1 Action Studio
 
-用于宇树 G1 Arm7 + Dex3-1 的动作制作工具：预检、手把手示教录制、动作整理、避碰衔接和回放。
+用于宇树 G1 Arm7 的动作制作工具：预检、手把手示教录制、动作整理、避碰衔接和回放。通过 profile 选择仅手臂或 Arm7 + Dex3-1。
+
+## 选择控制布局
+
+| 模式 | profile 示例 | 每帧关节数 |
+| --- | --- | --- |
+| 仅手臂控制 | `examples/profiles/teach-arm7.json`、`replay-arm7.json` | 14 |
+| 手臂和 Dex3-1 | `examples/profiles/teach.json`、`replay.json` | 28 |
+
+新入门流程使用仅手臂配置：`target_profile=unitree-g1-arm7`，无需手部反馈或手部增益，不创建手部 DDS 通道。`collision_hand_model=dex3-1` 表示实体手仍然安装着，避碰覆盖模型限位内的全部手指姿态。原有 Dex3 profile 继续启用双手，不会因缺少手部反馈而自动降级。
+
+仅手臂合成示例可以离线制作和预览：
+
+```bash
+uv run g1-action-studio build examples/arm7/recording.json --output data/arm7-action.json
+uv run --extra planning g1-action-studio replay unused data/arm7-action.json \
+  --profile examples/profiles/replay-arm7.json --output data/arm7-preview.json
+```
+
+现场示教沿用同一命令，换成 `teach-arm7.json`；真实控制仍须显式 `--execute`，参数示例不是通用真机参数。仅手臂模式不会使实体手卸力，不能强掰有保持力的手指。
+
+新录制、动作和计划输出与型号无关的 v2 格式，明确记录 `target_profile`、`joint_names` 和碰撞型号。现有 Dex3 v1 文件在加载入口校验并归一化，原文件不改写；14／28 关节动作不能混用，不能将旧 Dex3 动作交给仅手臂 profile，也不会截断或补零转换。
+
+完整手部活动范围采用连续关节区间检查与解析位移上界，无法证明无碰撞时拒绝规划；不是把手指固定在零位。原始链长球过于保守，已改为更细的区间网格集合，详见 [手部包络说明](docs/hand-envelope.md)。
 
 [项目架构图](docs/architecture.html) · [代码导航](docs/architecture.md) · [离线避碰过渡](docs/transitions.md) · [开发说明](CONTRIBUTING.md)
 
@@ -56,7 +79,7 @@ uv run --extra planning g1-action-studio transition examples/transition/action-a
 
 它输出“动作 A → 绕行过渡 → 动作 B”，检查完整轨迹及帧间运动。示例的直接连接会穿过机体，但规划器会绕开。OMPL RRTConnect 搜索路径，再用其原生接口简化路点、做 B-spline 空间平滑；过渡拐点平滑停住再出发，暂不做不停顿混合。默认腿和腰固定在模型参考零位；可通过 `--body-pose` 提供 J0–J14 的固定姿态。
 
-衔接结果与单个动作使用同一种 `g1-arm7-dex3-action-v1` 格式，可以直接交给 `replay`：
+衔接结果与单个动作使用同一种 `g1-action-studio-action-v2` 格式，可以直接交给 `replay`：
 
 ```bash
 uv run --extra planning g1-action-studio replay unused data/transition-preview.json \
@@ -111,7 +134,7 @@ uv run --extra planning g1-action-studio teach eth0 --side left \
 
 ### 4. 直接回放或可选整理
 
-`teach` 保存 `g1-arm7-dex3-state-recording-v1` 示教录制文件，可直接回放，无需先 `build`。
+`teach` 保存 `g1-action-studio-recording-v2` 示教录制文件，可直接回放，无需先 `build`。
 
 需要命名或保存可复用动作时使用 `build`。它将整段示教录制转换为动作，起止由示教时的两次回车决定：
 
@@ -122,7 +145,7 @@ uv run g1-action-studio build data/recording-001.json \
 
 转换时自动检查整段状态并重采样到 50 Hz；末尾不足一个采样周期时，补齐到下一个采样点并保留最后的实测姿态。
 
-单个动作和衔接动作均保存为 `g1-arm7-dex3-action-v1`，核心内容都是 `frames=[{t,q}]`。`replay` 自动识别录制与动作，已有动作直接读取，不重新制作。不再提供旧格式兼容和独立 `audit`。
+单个动作和衔接动作均保存为 `g1-action-studio-action-v2`，核心内容都是 `frames=[{t,q}]`。`replay` 自动识别录制与动作，已有动作直接读取，不重新制作。旧 Dex3 v1 只在文件入口校验并归一化，不提供独立 `audit`。
 
 以下命令可选择预览，不连接设备：
 
@@ -164,7 +187,7 @@ Ctrl+C 请求取消，状态可信时固定当前位置尝试释放。状态失�
 
 模型恢复了官方14个手指关节和网格，拇指中段使用官方碰撞 box，网格只用于显示；六个球形手指包络已移除。
 录制、动作和回放计划的 `q/dq` 顺序统一为左臂7、右臂7、左手7、右手7。每只手的模型顺序是拇指0/1/2、中指0/1、食指0/1。
-`joint_names` 必须与此顺序一致。新格式不加载旧的纯手臂录制或动作，也不为缺失手指补零；旧文件请保留，重新录制带手指反馈的动作。
+`joint_names` 必须与此顺序一致。新 v2 支持明确标识的14关节 Arm7 文件和28关节 Dex3 文件；历史的纯手臂草稿格式仍不支持，且不为缺失手指补零。
 
 程序订阅 `rt/dex3/left/state`、`rt/dex3/right/state` 的 `HandState_`，右手硬件食指/中指顺序通过名称映射调整。
 只有双臂和双手反馈均有效且未超时才继续；手指断流不能被手臂的新反馈掩盖。
@@ -181,5 +204,5 @@ Ctrl+C 请求取消，状态可信时固定当前位置尝试释放。状态失�
 回归测试使用 `tests/` 中的内存替身，不连接机器人，见[开发说明](CONTRIBUTING.md)。
 源码调用路径见[代码导航](docs/architecture.md)。项目不附带真实录制、设备凭据或厂商 SDK。
 
-目前支持 Arm7 + Dex3-1 手臂/手指动作制作，每次回放或示教选择一侧手臂及同侧手指；另一侧保持初始姿态。不提供 GUI、导航、动态环境避障或平衡求解。
+目前支持独立 Arm7 和 Arm7 + Dex3-1 手臂/手指动作制作，每次回放或示教选择一侧手臂及同侧手指；另一侧保持初始姿态。不提供 GUI、导航、动态环境避障或平衡求解。
 原创代码采用 MIT 许可；模型来源和第三方许可见[第三方说明](THIRD_PARTY_NOTICES.md)。

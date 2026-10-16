@@ -17,9 +17,21 @@ ROOT = Path(__file__).parents[1]
 
 
 class InteractiveTeachTests(unittest.TestCase):
-    def run_session(self, planning_error=None, eof=False, initial_collision=False, fault=None, close_error=False):
+    def run_session(
+        self,
+        planning_error=None,
+        eof=False,
+        initial_collision=False,
+        fault=None,
+        close_error=False,
+        arm_only=False,
+        cancel=False,
+    ):
         clock = VirtualClock()
         initial = json.loads((ROOT / "examples/transition/action-b.json").read_text())["samples"][0]["q"]
+        if arm_only:
+            initial = initial[:14]
+        profile_path = ROOT / ("examples/profiles/teach-arm7.json" if arm_only else "examples/profiles/teach.json")
         q, writes = list(initial), []
         port = SimpleNamespace(
             wait_ready=lambda timeout, stop: True,
@@ -31,7 +43,7 @@ class InteractiveTeachTests(unittest.TestCase):
         snapshot = lambda: {
             "at": clock.now,
             "q": tuple(q),
-            "dq": (0.0,) * 28,
+            "dq": (0.0,) * len(q),
             "motor_modes": (1,) * 14,
             "mode_pr": 0,
             "mode_machine": 5,
@@ -71,9 +83,12 @@ class InteractiveTeachTests(unittest.TestCase):
             def on_sleep(_duration):
                 nonlocal sent
                 elapsed = clock.now - began
+                if cancel and elapsed >= 0.4:
+                    stop.set()
                 if elapsed < 1.5:
                     q[0] += 0.0005
-                    q[14] += 0.0005
+                    if not arm_only:
+                        q[14] += 0.0005
                 if elapsed >= 0.4 and sent == 0:
                     events.put(EOFError() if eof else "enter")
                     sent = 1
@@ -91,7 +106,7 @@ class InteractiveTeachTests(unittest.TestCase):
             def start(self):
                 self.target(*self.args)
 
-        def route(start, end, side, body):
+        def route(start, end, side, body, *, layout):
             if planning_error and list(start) != list(end):
                 raise ValueError(planning_error)
             return [
@@ -115,20 +130,20 @@ class InteractiveTeachTests(unittest.TestCase):
             model.return_value.clearance.return_value = {"valid": not initial_collision}
             if initial_collision:
                 with self.assertRaisesRegex(ValueError, "初始姿态碰撞或余量不足"):
-                    teach("unused", "left", output, ROOT / "examples/profiles/teach.json", True)
+                    teach("unused", "left", output, profile_path, True)
                 self.assertEqual(writes, [])
                 self.assertFalse(output.exists())
                 return
-            if planning_error or eof or fault:
+            if planning_error or eof or fault or cancel:
                 expected = "发送失败.*模拟关闭失败" if close_error else "未自动释放"
                 with self.assertRaisesRegex(RuntimeError, expected):
-                    teach("unused", "left", output, ROOT / "examples/profiles/teach.json", True)
+                    teach("unused", "left", output, profile_path, True)
                 self.assertFalse(output.exists())
                 if fault != "send":
                     self.assertGreater(writes[-1]["weight"], 0)
                 port.close.assert_called_once()
                 return
-            result = teach("unused", "left", output, ROOT / "examples/profiles/teach.json", True)
+            result = teach("unused", "left", output, profile_path, True)
         port.check_services.assert_called_once()
         return initial, writes, result, json.loads(output.read_text(encoding="utf-8"))
 
@@ -170,7 +185,7 @@ class InteractiveTeachTests(unittest.TestCase):
     def test_runtime_feedback_failures_stop_without_release_or_file(self):
         for fault in (
             "missing",
-            ("at", lambda clock: clock.now - 1),
+            ("at", lambda clock: clock.now - 2),
             ("mode_machine", 4),
             ("motor_modes", (0,) * 14),
             ("q", (float("nan"),) * 28),
@@ -192,3 +207,18 @@ class InteractiveTeachTests(unittest.TestCase):
 
     def test_initial_collision_blocks_takeover(self):
         self.run_session(initial_collision=True)
+
+    def test_arm_only_recording_and_failure_paths(self):
+        initial, writes, result, data = self.run_session(arm_only=True)
+        self.assertEqual(len(initial), 14)
+        self.assertFalse(result["hand_control_enabled"])
+        self.assertTrue(all(row["hand_kp"] is None for row in writes))
+        self.assertTrue(all(len(row["q"]) == 14 for row in data["samples"]))
+        for arguments in (
+            {"eof": True},
+            {"planning_error": "无回位路径"},
+            {"fault": ("at", lambda clock: clock.now - 2)},
+            {"cancel": True},
+        ):
+            with self.subTest(arguments=arguments):
+                self.run_session(arm_only=True, **arguments)

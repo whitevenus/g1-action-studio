@@ -6,7 +6,7 @@ import math
 from collections.abc import Sequence
 from typing import NotRequired, TypedDict
 
-from .constants import DT, JOINT_COUNT, SIDE_OFFSETS
+from .constants import DEX3_LAYOUT, DT
 
 
 class Frame(TypedDict):
@@ -18,9 +18,9 @@ class Frame(TypedDict):
     weight: NotRequired[float]
 
 
-def finite_vector(values: object) -> list[float]:
-    if not isinstance(values, list) or len(values) != JOINT_COUNT:
-        raise ValueError("每帧必须包含双臂和双手的全部 28 个关节")
+def finite_vector(values: object, *, size: int = DEX3_LAYOUT.joint_count) -> list[float]:
+    if not isinstance(values, list) or len(values) != size:
+        raise ValueError("每帧必须包含完整的 {} 个关节".format(size))
     result = [float(value) for value in values]
     if not all(math.isfinite(value) for value in result):
         raise ValueError("关节数据包含 NaN 或 Infinity")
@@ -33,6 +33,8 @@ def frame_digest(frames: Sequence[Frame]) -> str:
 
 
 def interpolate_positions(start: Sequence[float], end: Sequence[float], ratio: float) -> list[float]:
+    if len(start) != len(end):
+        raise ValueError("插值起止关节维度不一致")
     return [a + (b - a) * ratio for a, b in zip(start, end)]
 
 
@@ -41,9 +43,11 @@ def smoothstep(ratio: float) -> float:
     return ratio**3 * (10 + ratio * (-15 + 6 * ratio))
 
 
-def hold_other_side(frames: Sequence[Frame], baseline: Sequence[float], side: str) -> list[Frame]:
+def hold_other_side(
+    frames: Sequence[Frame], baseline: Sequence[float], side: str, *, layout=DEX3_LAYOUT
+) -> list[Frame]:
     """只保留选中侧的动作，另一侧统一使用基线位置。"""
-    selected = SIDE_OFFSETS[side]
+    selected = layout.indices(side)
     return [
         {"t": frame["t"], "q": [value if i in selected else baseline[i] for i, value in enumerate(frame["q"])]}
         for frame in frames
@@ -57,13 +61,16 @@ def derivatives(values: Sequence[float]) -> tuple[list[float], list[float]]:
     return velocities, accelerations
 
 
-def validate_frames(frames: list[Frame]) -> list[list[float]]:
-    """校验完整关节和 50 Hz 时间轴，返回数值位置，不计算未使用的差分。"""
+def validate_frames(frames: list[Frame], *, size=None) -> list[list[float]]:
+    """纯计算按首帧推导维度；文件和执行边界传 size 锁定布局，所有帧仍须等长。"""
     if not isinstance(frames, list) or len(frames) < 3:
         raise ValueError("轨迹至少需要三帧")
     if any(not isinstance(frame, dict) for frame in frames):
         raise ValueError("每帧必须是包含 t 和 q 的对象")
-    points = [finite_vector(frame["q"]) for frame in frames]
+    size = len(frames[0]["q"]) if size is None else size
+    if size <= 0:
+        raise ValueError("轨迹关节不能为空")
+    points = [finite_vector(frame["q"], size=size) for frame in frames]
     times = [float(frame["t"]) for frame in frames]
     if (
         not all(math.isfinite(t) for t in times)

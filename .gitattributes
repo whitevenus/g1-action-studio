@@ -1,0 +1,2 @@
+# Keep Python checkouts consistent with the Ruff line-ending setting on every OS.
+*.py text eol=crlf

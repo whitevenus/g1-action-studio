@@ -1,5 +1,7 @@
 # 代码导航
 
+> 2026-10-16 更新：控制布局由 profile 显式选择，支持 Arm7 14关节或 Arm7 + Dex3-1 28关节。旧图中的固定28关节描述仅适用于 Dex3 模式。仅手臂模式仍检查实体手完整活动范围，算法见 [手部包络说明](hand-envelope.md)。文件入口兼容 Dex3 v1 并归一化，新文件输出型号无关的 v2。
+
 [打开可点击的项目架构图](architecture.html) · [查看架构图图片](architecture.png) · [下载 SVG](architecture.svg)
 
 源码直接放在 `src/`。`pyproject.toml` 将它映射为安装后的 `g1_action_studio` 包，不需要额外的同名目录。
@@ -8,6 +10,7 @@
 src/
   cli.py             日常命令入口
   constants.py       机型、关节布局、采样周期、示教渐变时长与资源路径
+  hand_envelope.py   未知手型的连续关节区间距离下界，仅用于离线几何查询
   trajectory.py      位置校验、插值、差分、统计与轨迹摘要
   config.py          示教/回放参数校验、JSON 读写和禁止覆盖
   preflight.py       只读预检

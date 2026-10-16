@@ -7,7 +7,8 @@ import re
 from bisect import bisect_right
 from pathlib import Path
 
-from .constants import ACTION_SCHEMA, ARM_SLOTS, DT, EXPECTED_MODE, JOINT_NAMES, PROFILE, RECORDING_SCHEMA, SIDE_OFFSETS
+from .config import document_layout, normalize_document
+from .constants import ACTION_SCHEMA, ACTION_SCHEMA_V2, ARM_SLOTS, DT, EXPECTED_MODE
 from .trajectory import Frame, finite_vector, frame_digest, interpolate_positions, metrics
 
 MAX_SOURCE_GAP = 0.10
@@ -25,12 +26,9 @@ def _interpolate(samples: list[dict], times: list[float], moment: float) -> list
 
 
 def validate_action(data):
+    layout = document_layout(data, "action")
     if (
         not isinstance(data, dict)
-        or data.get("schema") != ACTION_SCHEMA
-        or data.get("target_profile") != PROFILE
-        or data.get("arm_slots") != list(ARM_SLOTS)
-        or data.get("joint_names") != list(JOINT_NAMES)
         or data.get("kind") not in ("single", "sequence")
         or type(data.get("synthetic")) is not bool
     ):
@@ -50,7 +48,7 @@ def validate_action(data):
         raise ValueError("动作代码、版本或名称无效")
     if data["kind"] == "sequence":
         collision = data.get("collision")
-        if data.get("side") not in SIDE_OFFSETS or not isinstance(collision, dict):
+        if data.get("side") not in ("left", "right") or not isinstance(collision, dict):
             raise ValueError("组合动作缺少回放侧或碰撞规划参数")
         body = collision.get("body_q")
         margin = collision.get("clearance_m")
@@ -62,13 +60,16 @@ def validate_action(data):
             or not 0.001 <= margin <= 0.10
         ):
             raise ValueError("组合动作的机体姿态或避碰余量无效")
+    from .trajectory import validate_frames
+
+    validate_frames(data.get("frames"), size=layout.joint_count)
     result = metrics(data.get("frames"))
     if data.get("trajectory_sha256") != frame_digest(data["frames"]):
         raise ValueError("轨迹摘要不匹配")
     return result
 
 
-def _recording_frames(rows: list[dict]) -> list[Frame]:
+def _recording_frames(rows: list[dict], size) -> list[Frame]:
     """校验整段录制并重采样到 50 Hz，保留起点和最终实测姿态。"""
     samples = []
     last_time = float("-inf")
@@ -81,8 +82,8 @@ def _recording_frames(rows: list[dict]) -> list[Frame]:
         samples.append(
             {
                 "t": t,
-                "q": finite_vector(row["q"]),
-                "dq": finite_vector(row["dq"]),
+                "q": finite_vector(row["q"], size=size),
+                "dq": finite_vector(row["dq"], size=size),
                 "mode_machine": int(row["mode_machine"]),
                 "mode_pr": int(row["mode_pr"]),
             }
@@ -117,16 +118,10 @@ def load_action(
     data = json.loads(raw.decode("utf-8-sig"))
     if not isinstance(data, dict):
         raise ValueError("输入必须是录制或动作 JSON 对象")
-    if data.get("schema") == ACTION_SCHEMA:
+    if data.get("schema") in (ACTION_SCHEMA, ACTION_SCHEMA_V2):
         validate_action(data)
-        return data
-    if (
-        data.get("schema") != RECORDING_SCHEMA
-        or data.get("target_profile") != PROFILE
-        or data.get("arm_slots") != list(ARM_SLOTS)
-        or data.get("joint_names") != list(JOINT_NAMES)
-    ):
-        raise ValueError("不支持的录制或动作格式")
+        return normalize_document(data, "action")
+    layout = document_layout(data, "recording")
     rows = data.get("samples")
     if not isinstance(rows, list) or len(rows) < 3:
         raise ValueError("至少需要三帧状态")
@@ -135,19 +130,21 @@ def load_action(
     name = source.stem if name is None else name.strip()
     if type(version) is not int or version <= 0 or not name:
         raise ValueError("动作版本和名称无效")
-    frames = _recording_frames(rows)
+    frames = _recording_frames(rows, layout.joint_count)
     return {
-        "schema": ACTION_SCHEMA,
+        "schema": ACTION_SCHEMA_V2,
         "kind": "single",
         "action_code": code,
         "action_version": version,
         "display_name": name,
-        "target_profile": PROFILE,
+        "target_profile": layout.profile_id,
+        "collision_hand_model": "dex3-1",
         "arm_slots": list(ARM_SLOTS),
-        "joint_names": list(JOINT_NAMES),
+        "joint_names": list(layout.joint_names),
         "synthetic": data.get("qualification") == "synthetic_example_not_for_hardware",
         "source": {
             "file_name": source.name,
+            "schema": data["schema"],
             "sha256": hashlib.sha256(raw).hexdigest(),
         },
         "frames": frames,

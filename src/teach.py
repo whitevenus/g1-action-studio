@@ -9,14 +9,13 @@ from pathlib import Path
 from queue import Empty, Queue
 from threading import Event, Thread
 
-from .config import load_teach_profile, write_json
+from .config import document_layout, load_teach_profile, write_json
 from .constants import (
     ARM_SLOTS,
     COLLISION_MODEL,
+    DEX3_LAYOUT,
     DT,
-    JOINT_NAMES,
-    PROFILE,
-    RECORDING_SCHEMA,
+    RECORDING_SCHEMA_V2,
     SIDE_OFFSETS,
     TEACH_SOFTEN_SECONDS,
     TEACH_TAKEOVER_SECONDS,
@@ -58,10 +57,10 @@ def read_record_keys(events, stop):
         events.put(error)
 
 
-def plan_return(start, end, side, body_q):
+def plan_return(start, end, side, body_q, *, layout=DEX3_LAYOUT):
     from .collision import CollisionModel, find_path, parameterize_path
 
-    model = CollisionModel(body_q)
+    model = CollisionModel(body_q, layout=layout)
     # 时间参数化沿已验证的路径线段采样，不改变空间路径。
     return parameterize_path(find_path(model, start, end, side), 0.5, 2.0)
 
@@ -69,8 +68,10 @@ def plan_return(start, end, side, body_q):
 def run_session(interface, side, output, profile):
     """接管、降低刚度、回车录制、恢复刚度、避碰回位后释放。"""
     from .collision import CollisionModel
+
     # 各关节上下限
-    limits = load_limits(COLLISION_MODEL)
+    layout = document_layout(profile, "profile")
+    limits = load_limits(COLLISION_MODEL, layout=layout)
     # 停止信号、键盘线程向控制循环传递消息的队列
     stop, events = Event(), Queue()
     # 保存原始处理中断、终止信号的handler
@@ -79,7 +80,7 @@ def run_session(interface, side, output, profile):
     # baseline: 开始示教前的初始姿态，target：程序准备下发的目标姿态
     baseline = target = planned_body = None
     # 示教侧的关节索引
-    selected = SIDE_OFFSETS[side]
+    selected = layout.indices(side)
     # 录制的动作帧序列
     samples = []
     last_tick = None
@@ -89,8 +90,20 @@ def run_session(interface, side, output, profile):
     primary_error = None
     cleanup_errors = []
     # 保持姿态pd增益和示教时的pd增益
-    hold_gains = tuple(profile[key] for key in ("hold_kp", "hold_kd", "hand_hold_kp", "hand_hold_kd"))
-    teach_gains = tuple(profile[key] for key in ("teach_kp", "teach_kd", "hand_teach_kp", "hand_teach_kd"))
+    hold_gains = tuple(
+        profile[key]
+        for key in (
+            ("hold_kp", "hold_kd", "hand_hold_kp", "hand_hold_kd") if layout.hand_model else ("hold_kp", "hold_kd")
+        )
+    )
+    teach_gains = tuple(
+        profile[key]
+        for key in (
+            ("teach_kp", "teach_kd", "hand_teach_kp", "hand_teach_kd")
+            if layout.hand_model
+            else ("teach_kp", "teach_kd")
+        )
+    )
 
     def tick(gains=hold_gains, weight=1.0, *, follow=False, capture_start: float | None = None):
         nonlocal target, last_tick, control_attempted
@@ -99,7 +112,7 @@ def run_session(interface, side, output, profile):
         now = time.monotonic()
         if last_tick is not None and now - last_tick > 0.1:
             raise RuntimeError("示教控制周期超时")
-        state = validate_snapshot(port.snapshot(), time.monotonic())
+        state = validate_snapshot(port.snapshot(), time.monotonic(), layout=layout)
         if any(not low <= q <= high for q, (low, high) in zip(state["q"], limits)):
             raise RuntimeError("反馈角度超出关节范围")
         if planned_body is not None:
@@ -118,7 +131,8 @@ def run_session(interface, side, output, profile):
         if max(abs(a - b) for a, b in zip(state["q"], target)) > 0.15:
             raise RuntimeError("示教保持或回位跟踪误差超限")
         last_tick = now
-        kp, kd, hand_kp, hand_kd = gains
+        kp, kd = gains[:2]
+        hand_kp, hand_kd = gains[2:] if layout.hand_model else (None, None)
         control_attempted = True
         if (
             port.write(
@@ -179,20 +193,20 @@ def run_session(interface, side, output, profile):
             time.sleep(DT)
 
     try:
-        port = ReplaySdkPort(create_sdk(interface), time)
+        port = ReplaySdkPort(create_sdk(interface), time, layout=layout)
         if not port.wait_ready(5, stop):
             raise RuntimeError("等待初始状态超时")
         time.sleep(3)
         if port.observed_commands():
             raise RuntimeError("观测到其他手臂或手指命令；不接管")
         port.check_services()
-        state = validate_snapshot(port.snapshot(), time.monotonic())
+        state = validate_snapshot(port.snapshot(), time.monotonic(), layout=layout)
         baseline = tuple(state["q"])
         target = list(baseline)
         # 初始姿态须在模型范围内且无本体碰撞，才能开始接管。
         if state.get("body_q") is None:
             raise RuntimeError("避碰示教需要腿/腰姿态反馈")
-        check = CollisionModel(state["body_q"]).clearance(baseline, 0.02)
+        check = CollisionModel(state["body_q"], layout=layout).clearance(baseline, 0.02)
         if not check["valid"]:
             raise ValueError("初始姿态碰撞或余量不足：{}".format(check))
         # 替换默认handler为停止标志
@@ -210,13 +224,13 @@ def run_session(interface, side, output, profile):
         # 最后一帧已冻结 target；恢复增益时不再追随手动移动。
         stage = "恢复刚度"
         ramp(1, 1, 1, teach_gains, hold_gains)
-        state = validate_snapshot(port.snapshot(), time.monotonic())
+        state = validate_snapshot(port.snapshot(), time.monotonic(), layout=layout)
         planned_body = state.get("body_q")
         if planned_body is None:
             raise RuntimeError("避碰回位需要腿/腰姿态反馈")
         stage = "规划回位"
         pool = ThreadPoolExecutor(max_workers=1)
-        future = pool.submit(plan_return, list(target), baseline, side, list(planned_body))
+        future = pool.submit(plan_return, list(target), baseline, side, list(planned_body), layout=layout)
         while not future.done():
             tick()
             time.sleep(DT)
@@ -279,11 +293,12 @@ def run_session(interface, side, output, profile):
     if len(samples) < 3:
         raise RuntimeError("录制至少需要三帧；已回位释放，未保存录制")
     payload = {
-        "schema": RECORDING_SCHEMA,
+        "schema": RECORDING_SCHEMA_V2,
         "qualification": "raw_observation_not_executable",
-        "target_profile": PROFILE,
+        "target_profile": layout.profile_id,
+        "collision_hand_model": "dex3-1",
         "arm_slots": list(ARM_SLOTS),
-        "joint_names": list(JOINT_NAMES),
+        "joint_names": list(layout.joint_names),
         "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
         "teaching_side": side,
         "teaching_profile": profile,
@@ -296,7 +311,14 @@ def run_session(interface, side, output, profile):
         "samples": len(samples),
         "release_sent": True,
         "hand_release_sent": False,
-        "hand_finish": "已发送初始手型保持目标；关闭发布器不证明手指已卸力或保持",
+        "hand_finish": "已发送初始手型保持目标；关闭发布器不证明手指已卸力或保持"
+        if layout.hand_model
+        else "手部控制未启用",
+        "target_profile": layout.profile_id,
+        "controlled_joint_count": layout.joint_count,
+        "hand_control_enabled": layout.hand_model is not None,
+        "collision_hand_model": "dex3-1",
+        "hand_collision_policy": "measured_joints" if layout.hand_model else "full_range_envelope",
         "duration_s": samples[-1]["t"],
         "qualification": payload["qualification"],
     }

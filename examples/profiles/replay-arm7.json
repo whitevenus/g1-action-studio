@@ -1,0 +1,19 @@
+{
+  "schema": "g1-action-studio-control-profile-v2",
+  "target_profile": "unitree-g1-arm7",
+  "hold_kp": 60.0,
+  "hold_kd": 1.5,
+  "max_target_velocity_rad_s": 0.7,
+  "max_target_acceleration_rad_s2": 10.0,
+  "max_tracking_error_rad": 0.15,
+  "initial_pose_tolerance_rad": 0.05,
+  "return_tolerance_rad": 0.05,
+  "return_speed_rad_s": 0.1,
+  "state_timeout_s": 0.25,
+  "max_tick_gap_s": 0.1,
+  "settle_timeout_s": 5.0,
+  "recovery_release_s": 2.0,
+  "qualification": "example_not_hardware_qualified",
+  "notes": "格式与参数示例，未对你的设备验收；不得把示例数值当作通用安全参数。 手指增益独立配置，尚未真机验证可拖动性；手部没有手臂控制权重，结束不代表手部已卸力。",
+  "collision_hand_model": "dex3-1"
+}
